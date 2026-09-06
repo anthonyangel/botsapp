@@ -45,13 +45,11 @@ class FixAuthkitIssuerTrailingSlashMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith(
-            _TARGET_PATH_PREFIX
-        ):
+        if scope["type"] != "http" or not scope["path"].startswith(_TARGET_PATH_PREFIX):
             await self.app(scope, receive, send)
             return
 
-        start_message: dict | None = None
+        start_message: Message | None = None
         body_chunks: list[bytes] = []
 
         async def send_wrapper(message: Message) -> None:
@@ -77,9 +75,7 @@ class FixAuthkitIssuerTrailingSlashMiddleware:
                     data = json.loads(body)
                     if isinstance(data, dict):
                         body = json.dumps(_strip_trailing_slashes(data)).encode()
-                        headers = [
-                            (k, v) for k, v in headers if k.lower() != b"content-length"
-                        ]
+                        headers = [(k, v) for k, v in headers if k.lower() != b"content-length"]
                         headers.append((b"content-length", str(len(body)).encode()))
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass  # not JSON (e.g. an error page) — pass through unmodified
