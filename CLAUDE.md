@@ -28,7 +28,7 @@ broken link to fix.
 
 ## Architecture
 
-Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-single-fly-app-two-process-groups.md)):
+Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-single-fly-app-shared-volume.md)):
 
 | Service | What | Reachable from |
 |---|---|---|
@@ -38,8 +38,10 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
 
 - `mcp-server` and `admin-ui` share one SQLite file (`chat_metadata.db`, WAL
   mode) for tags/allowlist — see [0007](docs/decisions/0007-sqlite-for-metadata-store.md).
-  This is why they deploy as **one Fly app with two process groups** sharing
-  one volume, not two separate apps — see [0013](docs/decisions/0013-single-fly-app-two-process-groups.md).
+  This is why they run as **two processes inside one Fly Machine**, sharing
+  one volume — a Fly Volume attaches to only one Machine at a time, so two
+  separate Machines (or Fly "process groups", which are still separate
+  Machines) can't share it. See [0013](docs/decisions/0013-single-fly-app-shared-volume.md).
 - Nothing is visible to the MCP server until explicitly allowlisted in the
   admin UI — see [0004](docs/decisions/0004-chat-allowlist-and-admin-ui.md).
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked

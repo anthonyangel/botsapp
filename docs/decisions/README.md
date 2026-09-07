@@ -14,7 +14,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0010 — Drop Cloudflare Tunnel/Access; Fly.io's own HTTPS + AuthKit is the whole exposure story](0010-drop-cloudflare-two-provider-deploy.md) *(supersedes the Cloudflare-related parts of 0001/0002/0003)*
 - [0011 — WorkOS JWT Template replaces `WorkOSTokenVerifier`; real `aud` validation restored](0011-jwt-template-drops-workostokenverifier.md) *(supersedes the verifier-construction half of 0005's addendum)*
 - [0012 — `AuthKitProvider` advertises a trailing-slash issuer; blocks every real login](0012-authkitprovider-issuer-trailing-slash-bug.md) *(open bug, not fixed by 0011)*
-- [0013 — `mcp-server`/`admin-ui` deploy as one Fly app, two process groups; `waha` stays separate](0013-single-fly-app-two-process-groups.md) *(amends the app count in 0010)*
+- [0013 — `mcp-server`/`admin-ui` deploy as one Fly Machine, two processes; `waha` stays separate](0013-single-fly-app-shared-volume.md) *(amends the app count in 0010)*
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 

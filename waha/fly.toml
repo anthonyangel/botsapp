@@ -1,0 +1,40 @@
+# Fly app for the WAHA bridge — see docs/decisions/0010/0013. No
+# [http_service] or [[services]] block at all, deliberately: this app must
+# never be reachable beyond Fly's private 6PN networking (reached from
+# botsapp as http://botsapp-waha.internal:3000) / `fly proxy` from a laptop.
+#
+# App name is a placeholder — set at `fly apps create` time; `app` here
+# must match whatever name actually got created, and server/fly.toml's
+# WAHA_URL must be updated to match if it's ever renamed.
+app = "botsapp-waha"
+primary_region = "fra"
+
+[build]
+  # devlikeapro/waha:latest has no arm64 build; dev-arm avoids a
+  # QR-pairing-breaking bug the stable arm tag has as of this writing —
+  # see docs/decisions/0007's note. Re-check before moving off dev-arm.
+  image = "devlikeapro/waha:dev-arm"
+
+[[mounts]]
+  source = "waha_sessions"
+  destination = "/app/.sessions"
+  initial_size = "1gb"
+
+[[mounts]]
+  source = "waha_media"
+  destination = "/app/.media"
+  initial_size = "1gb"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  # WEBJS drives real headless Chromium — give it real memory, not the
+  # smallest tier. /dev/shm sizing on Fly Machines isn't the same knob as
+  # docker-compose's explicit shm_size: 2gb; watch logs after first deploy
+  # for a Chromium shm crash and bump this if it happens.
+  memory = "1gb"
+
+[env]
+  WHATSAPP_DEFAULT_ENGINE = "WEBJS"
+  WHATSAPP_FILES_FOLDER = "/app/.media"
+  WHATSAPP_FILES_LIFETIME = "0"
+  # WAHA_API_KEY goes through `fly secrets set`, never here.

@@ -7,8 +7,9 @@ project-level architecture and the decision log this all implements.
 
 ## Entry points
 
-One image (`Dockerfile`), two `command:` overrides (Compose today, two Fly
-process groups once deployed — [0013](../docs/decisions/0013-single-fly-app-two-process-groups.md)):
+One image (`Dockerfile`), two `command:` overrides (Compose today, two
+processes inside one Fly Machine once deployed via `server/start.sh` — see
+[0013](../docs/decisions/0013-single-fly-app-shared-volume.md)):
 
 - `botsapp.main:app` — the MCP server, port 8000. FastMCP instance lives in
   `app.py` (kept separate from `main.py` so `tools.py` can import it without

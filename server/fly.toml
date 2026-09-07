@@ -1,0 +1,59 @@
+# Fly app for mcp-server + admin-ui — see docs/decisions/0013. Both run as
+# separate processes inside this one Machine (server/start.sh), sharing the
+# two volumes below; only port 8000 (mcp-server) is ever declared as a
+# public service, so port 8100 (admin-ui) stays reachable only over Fly's
+# private 6PN networking / `fly proxy`, never the public internet.
+#
+# App name/region are placeholders — set at `fly launch`/`fly apps create`
+# time; `app` here must match whatever name actually got created.
+app = "botsapp"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[processes]
+  app = "./start.sh"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[mounts]]
+  source = "botsapp_data"
+  destination = "/app/data"
+  initial_size = "1gb"
+  processes = ["app"]
+
+[[mounts]]
+  source = "botsapp_media"
+  destination = "/app/media"
+  initial_size = "1gb"
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["app"]
+
+[env]
+  # DATABASE_URL/MEDIA_DIR point at the mounts above — same paths
+  # docker-compose.yml already uses locally.
+  DATABASE_URL = "/app/data/chat_metadata.db"
+  MEDIA_DIR = "/app/media"
+  # botsapp-waha's Fly 6PN internal DNS name — private networking only,
+  # never a public URL. Update if the waha app is ever named differently.
+  WAHA_URL = "http://botsapp-waha.internal:3000"
+  WAHA_SESSION = "default"
+  LOG_LEVEL = "INFO"
+  # This app's own public URL — must match whatever `fly apps create`
+  # actually names it (https://<app-name>.fly.dev).
+  MCP_BASE_URL = "https://botsapp.fly.dev"
+  # Not secret (it's already exposed via the public OAuth discovery
+  # endpoint) — WAHA_API_KEY and ALLOWED_EMAILS are the two that go
+  # through `fly secrets set` instead, never here.
+  WORKOS_AUTHKIT_DOMAIN = ""
