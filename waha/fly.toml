@@ -10,10 +10,13 @@ app = "botsapp-waha"
 primary_region = "fra"
 
 [build]
-  # devlikeapro/waha:latest has no arm64 build; dev-arm avoids a
-  # QR-pairing-breaking bug the stable arm tag has as of this writing —
-  # see docs/decisions/0007's note. Re-check before moving off dev-arm.
-  image = "devlikeapro/waha:dev-arm"
+  # NOT dev-arm here: that tag is arm64-only (Apple Silicon, for local
+  # Compose — see docs/decisions/0007's note and docker-compose.yml's
+  # WAHA_IMAGE override), and Fly Machines default to amd64. Confirmed by
+  # a real deploy failure ("does not support amd64 architecture for linux
+  # os") before landing on this tag — the arm-tag QR-pairing bug that note
+  # describes is specific to the `arm` tag, not this one.
+  image = "devlikeapro/waha:latest"
 
 [[mounts]]
   source = "waha_sessions"
