@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0013.
+been kept in date order, current through 0014.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):

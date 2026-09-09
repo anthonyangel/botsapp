@@ -15,8 +15,10 @@ check for the tools that talk to the bridge or chat_metadata directly.
 get_media is a hybrid: it resolves message_id to a chat_jid via
 state.message_store (unfiltered — see
 AllowlistedMessageStore.get_message_chat_jid) and then checks that jid
-explicitly, since the media cache on disk is keyed only by message_id and
-populated bridge-side independent of the allowlist.
+explicitly, before fetching the media itself (also via state.message_store,
+also unfiltered — see AllowlistedMessageStore.get_media) — there's no
+allowlist-aware store to delegate that fetch through until the jid is
+already known to be allowed.
 
 Bridge-agnostic: every write/group/contact/session call goes through
 state.bridge, which returns bridge.py's dataclasses (SendResult, GroupInfo,
@@ -29,11 +31,12 @@ from dataclasses import asdict
 from typing import Any
 
 from fastmcp import Context
-from fastmcp.utilities.types import Image
+from fastmcp.utilities.types import Audio, File, Image
 
 import botsapp.state as state
 from botsapp.app import OUTBOUND_TAG, mcp
 from botsapp.message_store import ChatNotAllowedError
+from botsapp.transcription import transcribe_audio
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +114,10 @@ async def list_messages(jid: str, limit: int = 50, offset: int = 0) -> list[dict
 
     Returns:
         List with fields: message_id, from, sender_name, to, chat_jid, chat_name,
-        text, timestamp, message_type, media_url. sender_name/chat_name fall
-        back to the raw jid when no matching contact/chat name is known.
+        text, timestamp, message_type, media_url, mimetype. sender_name/chat_name
+        fall back to the raw jid when no matching contact/chat name is known.
+        mimetype is set (e.g. "image/jpeg", "audio/ogg; codecs=opus") whenever
+        message_type is "media" — pass message_id to get_media() to fetch it.
     """
     try:
         assert state.message_store is not None
@@ -139,8 +144,10 @@ async def search_messages(
 
     Returns:
         List with fields: message_id, from, sender_name, chat_jid, chat_name,
-        text, timestamp, message_type, media_url. sender_name/chat_name fall
-        back to the raw jid when no matching contact/chat name is known.
+        text, timestamp, message_type, media_url, mimetype. sender_name/chat_name
+        fall back to the raw jid when no matching contact/chat name is known.
+        mimetype is set (e.g. "image/jpeg", "audio/ogg; codecs=opus") whenever
+        message_type is "media" — pass message_id to get_media() to fetch it.
     """
     try:
         assert state.message_store is not None
@@ -682,23 +689,54 @@ async def get_chat_metadata(jid: str) -> dict[str, Any]:
 # ── Media ────────────────────────────────────────────────────────────────
 
 
-@mcp.tool(tags={"read", "media"})
-async def get_media(message_id: str) -> Image:
-    """Retrieve a saved media thumbnail (image/video/sticker) for a message.
+def _media_content(mimetype: str, data: bytes) -> Image | Audio | File:
+    """Wrap raw media bytes in the fastmcp content type matching mimetype.
 
-    Checks local disk for the media thumbnail. Only returns media for
-    messages belonging to an allowlisted chat. The media cache on
-    disk is keyed only by message_id and is populated bridge-side
-    independent of the allowlist, so this resolves message_id back to its
-    chat_jid and checks that explicitly, the same way get_chat_metadata/
-    add_tag do for tools that don't already go through
-    AllowlistedMessageStore.
+    MCP only has first-class content blocks for text/image/audio (see
+    mcp.types.ContentBlock) — there's no dedicated video type, so video and
+    everything else (documents, ...) falls back to a generic embedded
+    resource via File. Image/Audio derive their reported MIME type from
+    ``format``; File derives it from a filename it doesn't have here (it'd
+    otherwise guess "application/<format>", wrong for e.g. video/mp4), so
+    its mime type is set directly instead.
+    """
+    clean = (mimetype or "").split(";", 1)[0].strip().lower() or "application/octet-stream"
+    top_level, _, subtype = clean.partition("/")
+    if top_level == "image":
+        return Image(data=data, format=subtype or "jpeg")
+    if top_level == "audio":
+        return Audio(data=data, format=subtype or "ogg")
+    file = File(data=data)
+    file._mime_type = clean  # noqa: SLF001 — see docstring above
+    return file
+
+
+@mcp.tool(tags={"read", "media"})
+async def get_media(message_id: str) -> Image | Audio | File | list[Image | Audio | File | str]:
+    """Retrieve a message's media — image, sticker, video, or voice note/audio.
+
+    Only returns media for messages belonging to an allowlisted chat: this
+    resolves message_id back to its chat_jid and checks that explicitly,
+    the same way get_chat_metadata/add_tag do for tools that don't already
+    go through AllowlistedMessageStore. The media itself is fetched
+    straight from WAHA, which keeps its own persistent copy of everything
+    it has downloaded — this server does not cache media locally.
+
+    A voice note's raw audio bytes reach the caller as an opaque blob, not
+    something readable — MCP's Audio content block is for playback, and
+    nothing here assumes the receiving model can listen to it. So for
+    audio, this also attempts a transcript (see transcription.py; best
+    effort — silently omitted if OPENAI_API_KEY isn't configured or the
+    request fails) and returns it as a second item alongside the audio.
 
     Args:
         message_id: The message_id field from list_messages or search_messages.
 
     Returns:
-        The JPEG thumbnail image.
+        The media content, typed to match its mimetype (Image for
+        images/stickers, Audio for voice notes/audio, File for anything
+        else such as video or documents) — or, for audio with a transcript
+        available, a two-item list of [Audio, transcript text].
     """
     assert state.message_store is not None
     assert state.db is not None
@@ -706,17 +744,19 @@ async def get_media(message_id: str) -> Image:
     if chat_jid is None or chat_jid not in await state.db.list_allowed_jids():
         raise ChatNotAllowedError(f"message '{message_id}' is not in an allowed chat")
 
-    safe_id = message_id.replace("/", "_").replace(":", "_")
-
-    if state.media_dir is not None:
-        path = state.media_dir / f"{safe_id}.jpg"
-        if path.exists():
-            return Image(data=path.read_bytes(), format="jpeg")
-
-    raise FileNotFoundError(
-        f"No media found for message '{message_id}'. "
-        "Media is only saved for messages received while the server is running."
-    )
+    media = await state.message_store.get_media(message_id=message_id, chat_jid=chat_jid)
+    if media is None:
+        raise FileNotFoundError(
+            f"No media found for message '{message_id}'. "
+            "Either this message has no attached media, or WAHA no longer "
+            "has a copy of it."
+        )
+    content = _media_content(media["mimetype"], media["data"])
+    if isinstance(content, Audio):
+        transcript = await transcribe_audio(media["data"], media["mimetype"], media.get("filename"))
+        if transcript:
+            return [content, transcript]
+    return content
 
 
 # ── Session management ────────────────────────────────────────────────────

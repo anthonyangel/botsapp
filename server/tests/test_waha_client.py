@@ -843,7 +843,32 @@ async def test_search_messages_across_chats_sorts_by_timestamp_desc(client, ares
     assert results[1]["sender_name"] == "1@s.whatsapp.net"
 
 
-async def test_get_message_chat_jid_finds_owning_chat(client, aresponses):
+async def test_get_message_chat_jid_parses_direct_chat_id_without_a_request(client, aresponses):
+    # A real WAHA message id embeds its own chat jid — "{fromMe}_{remoteJid}_{id}"
+    # for a direct chat — so this resolves with a plain string parse, no
+    # request at all. No aresponses mock is registered; an actual HTTP call
+    # here would fail the test outright (aresponses errors on anything
+    # unmocked), so this also proves no request was made.
+    result = await client.get_message_chat_jid(
+        message_id="false_158974036971688@lid_3EB04F614E3B0953C570DB"
+    )
+    assert result == "158974036971688@lid"
+
+
+async def test_get_message_chat_jid_parses_group_message_id_without_a_request(client, aresponses):
+    # Groups add a trailing "_{participant}" segment — must not be mistaken
+    # for part of the chat jid.
+    result = await client.get_message_chat_jid(
+        message_id="false_120363423308733238@g.us_AC92B9A16667_125512450101250@lid"
+    )
+    assert result == "120363423308733238@g.us"
+
+
+async def test_get_message_chat_jid_falls_back_to_scan_for_unrecognized_id(client, aresponses):
+    # An id that doesn't match WAHA's own "{fromMe}_{remoteJid}_{id}" shape
+    # (this test suite's usual plain "m1"/"m2" stand-ins, and conceivably a
+    # real id format WAHA changes to later) falls back to the old
+    # scan-every-chat approach rather than giving up outright.
     _mock(
         aresponses,
         "get",
@@ -870,7 +895,7 @@ async def test_get_message_chat_jid_finds_owning_chat(client, aresponses):
     assert result == "2@s.whatsapp.net"
 
 
-async def test_get_message_chat_jid_returns_none_when_not_found(client, aresponses):
+async def test_get_message_chat_jid_scan_returns_none_when_not_found(client, aresponses):
     _mock(
         aresponses,
         "get",
@@ -885,6 +910,68 @@ async def test_get_message_chat_jid_returns_none_when_not_found(client, arespons
         payload=[{"id": "m1", "from": "1@c.us", "body": "hi"}],
     )
     result = await client.get_message_chat_jid(message_id="missing")
+    assert result is None
+
+
+async def test_get_media_fetches_bytes_for_a_voice_note(client, aresponses):
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/{SESSION}/chats/1@c.us/messages/false_1@c.us_ABC",
+        payload={
+            "id": "false_1@c.us_ABC",
+            "hasMedia": True,
+            "media": {
+                # A real WAHA instance reports "url" against *its own* idea
+                # of its address (confirmed live: a fixed
+                # "http://localhost:3000/...", regardless of the
+                # waha-network-hostname/6PN address this client actually
+                # used to reach it) — deliberately a different host than
+                # BASE_URL here, to prove get_media() re-fetches against
+                # its own base_url + the path rather than following this
+                # host. The mock below is only reachable at BASE_URL, so
+                # following the raw url as given would fail this test.
+                "url": f"http://localhost:3000/api/files/{SESSION}/false_1@c.us_ABC.oga?foo=bar",
+                "filename": None,
+                "mimetype": "audio/ogg; codecs=opus",
+            },
+        },
+    )
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/files/{SESSION}/false_1@c.us_ABC.oga",
+        body=b"OggS-fake-opus-bytes",
+        content_type="audio/ogg",
+    )
+    result = await client.get_media(message_id="false_1@c.us_ABC", chat_jid="1@s.whatsapp.net")
+    assert result == {
+        "data": b"OggS-fake-opus-bytes",
+        "mimetype": "audio/ogg; codecs=opus",
+        "filename": None,
+    }
+
+
+async def test_get_media_returns_none_when_message_has_no_media(client, aresponses):
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/{SESSION}/chats/1@c.us/messages/m1",
+        payload={"id": "m1", "hasMedia": False, "media": None},
+    )
+    result = await client.get_media(message_id="m1", chat_jid="1@s.whatsapp.net")
+    assert result is None
+
+
+async def test_get_media_returns_none_when_message_not_found(client, aresponses):
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/{SESSION}/chats/1@c.us/messages/missing",
+        status=404,
+        payload={"message": "not found"},
+    )
+    result = await client.get_media(message_id="missing", chat_jid="1@s.whatsapp.net")
     assert result is None
 
 

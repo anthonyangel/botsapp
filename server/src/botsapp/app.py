@@ -9,7 +9,6 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import AuthorizationError
@@ -96,11 +95,6 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
     state.message_store = AllowlistedMessageStore(raw_store, state.db)
     logger.info("Bridge ready (%s)", bridge_provider_name())
 
-    media_dir = Path(os.getenv("MEDIA_DIR", "/app/media"))
-    media_dir.mkdir(parents=True, exist_ok=True)
-    state.media_dir = media_dir
-    logger.info("Media directory: %s", media_dir)
-
     yield
 
     await state.bridge.close()
@@ -108,7 +102,6 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
     state.db = None
     state.message_store = None
     state.bridge = None
-    state.media_dir = None
     logger.info("Shutdown complete")
 
 

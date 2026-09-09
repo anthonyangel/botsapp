@@ -32,9 +32,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 
@@ -44,6 +45,13 @@ logger = logging.getLogger(__name__)
 
 _WAHA_SUFFIX = "@c.us"
 _CANONICAL_SUFFIX = "@s.whatsapp.net"
+
+# A WAHA message id is whatsapp-web.js's own serialized message-key string:
+# "{fromMe}_{remoteJid}_{id}", optionally with a trailing "_{participant}"
+# for group messages. remoteJid never contains "_", so the first segment
+# after the leading true/false is always the chat jid — see
+# get_message_chat_jid below.
+_MESSAGE_ID_CHAT_RE = re.compile(r"^(?:true|false)_([^_]+)_")
 
 
 def _to_waha_jid(jid: str) -> str:
@@ -667,17 +675,34 @@ class WAHAClient:
         ]
         return matches[offset : offset + limit]
 
-    async def update_media_link(self, message_id: str, media_link: str) -> None:
-        # WAHA serves media directly from its own API; this project doesn't
-        # need a local media-path cache for it the way an earlier bridge's
-        # store did.
-        return None
-
     async def get_message_chat_jid(self, message_id: str) -> str | None:
+        """Resolve a message_id to the chat_jid it belongs to.
+
+        WAHA's message ids *are* whatsapp-web.js's serialized message-key
+        string — "{fromMe}_{remoteJid}_{id}" for a direct chat, or
+        "{fromMe}_{remoteJid}_{id}_{participant}" for a group (confirmed
+        live: matches the raw message's own `_data.id.$1`/`_serialized`
+        field exactly, for both shapes). remoteJid *is* the chat jid, so
+        this is a plain string parse in the common case — no request at
+        all — rather than a lookup.
+
+        Only falls back to the old "scan every chat's recent messages"
+        approach when a message_id doesn't match that shape (a WAHA format
+        change, or a synthetic id from somewhere else) — belt-and-braces,
+        not the expected path, and the reason this method stays async.
+        """
+        match = _MESSAGE_ID_CHAT_RE.match(message_id)
+        if match:
+            return _from_waha_jid(match.group(1))
+        return await self._get_message_chat_jid_by_scan(message_id)
+
+    async def _get_message_chat_jid_by_scan(self, message_id: str) -> str | None:
         # No cross-chat "look up by message id" endpoint — same trade-off
         # as search_messages above: scan every chat's recent messages
         # client-side. Fine at family scale; would need rethinking for a
-        # large number of chats.
+        # large number of chats. (In practice this is now a fallback path —
+        # see get_message_chat_jid — since a real WAHA message_id is
+        # parseable directly.)
         jids = [c["jid"] for c in await self.get_chats(limit=1000, offset=0)]
         results = await asyncio.gather(
             *(
@@ -696,6 +721,54 @@ class WAHAClient:
                 if m.get("id") == message_id:
                     return chat_jid
         return None
+
+    async def get_media(self, message_id: str, chat_jid: str) -> dict[str, Any] | None:
+        """Fetch a message's media bytes + mimetype straight from WAHA.
+
+        WAHA keeps its own persistent copy of everything it has downloaded
+        (WHATSAPP_FILES_LIFETIME=0 — see
+        docs/decisions/0007-sqlite-for-metadata-store.md) and serves it
+        back over its own REST API; this project doesn't need — and, until
+        now, didn't actually have — a local media cache of its own.
+
+        Two calls: the per-message endpoint (confirmed live to return a
+        "media": {"url", "filename", "mimetype"} object whenever
+        "hasMedia" is true) to learn where the file lives, then a plain GET
+        against that URL for the bytes. Returns None if the message has no
+        media, or WAHA no longer has a copy of it.
+
+        The "url" WAHA hands back is built from *its own* idea of its
+        public address (confirmed live: a fixed "http://localhost:3000/..."
+        regardless of the host/port this client actually used to reach
+        it) — not necessarily how this process can reach it (e.g. the
+        "waha" Docker-network hostname, or Fly's 6PN
+        botsapp-waha.internal). Only the path is trustworthy; refetch
+        against self._base_url instead of following the URL as given.
+        """
+        try:
+            data = await self._get(
+                f"/api/{self._session_name}/chats/{_to_waha_jid(chat_jid)}/messages/{message_id}"
+            )
+        except Exception as exc:
+            logger.debug("Could not fetch message %s for media: %s", message_id, exc)
+            return None
+        media = (data or {}).get("media") or {}
+        raw_url = media.get("url")
+        if not raw_url:
+            return None
+        parsed = urlsplit(raw_url)
+        url = f"{self._base_url}{parsed.path}" + (f"?{parsed.query}" if parsed.query else "")
+        http = await self._get_http()
+        async with http.request("GET", url, headers=self._headers()) as resp:
+            if resp.status >= 400:
+                logger.warning("WAHA media fetch %s → %s", url, resp.status)
+                return None
+            file_bytes = await resp.read()
+        return {
+            "data": file_bytes,
+            "mimetype": media.get("mimetype") or "application/octet-stream",
+            "filename": media.get("filename"),
+        }
 
     # ── Internal helpers ─────────────────────────────────────────────────
 
@@ -853,5 +926,12 @@ class WAHAClient:
             # ISO-8601 UTC string, not a raw epoch int — see _iso_timestamp.
             "timestamp": _iso_timestamp(m.get("timestamp")),
             "message_type": "media" if m.get("hasMedia") else "text",
+            # Not WAHA's own file URL — that's internal to the private
+            # waha/mcp-server network and needs the WAHA API key to fetch,
+            # so it wouldn't be usable by an MCP client anyway. Kept as an
+            # explicit None rather than dropped, so callers can still see
+            # the field; get_media() is the one place that actually
+            # resolves+fetches it, using the server's own credentials.
             "media_url": None,
+            "mimetype": (m.get("media") or {}).get("mimetype"),
         }

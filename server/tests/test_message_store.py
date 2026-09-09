@@ -126,11 +126,6 @@ async def test_search_chats_filters_to_allowed(wrapped, inner):
     assert result == [{"jid": "allowed@g.us", "name": "Family"}]
 
 
-async def test_update_media_link_delegates_unfiltered(wrapped, inner):
-    await wrapped.update_media_link(message_id="m1", media_link="/x.jpg")
-    inner.update_media_link.assert_awaited_once_with(message_id="m1", media_link="/x.jpg")
-
-
 async def test_get_message_chat_jid_delegates_unfiltered(wrapped, inner):
     # Deliberately not allowlist-checked here — get_media resolves the jid
     # via this method and then checks it explicitly against state.db,
@@ -139,3 +134,12 @@ async def test_get_message_chat_jid_delegates_unfiltered(wrapped, inner):
     result = await wrapped.get_message_chat_jid(message_id="m1")
     assert result == "other@g.us"
     inner.get_message_chat_jid.assert_awaited_once_with(message_id="m1")
+
+
+async def test_get_media_delegates_unfiltered(wrapped, inner):
+    # Same reasoning as get_message_chat_jid above: tools.get_media() has
+    # already resolved+checked chat_jid by the time it calls this.
+    inner.get_media.return_value = {"data": b"abc", "mimetype": "image/jpeg", "filename": None}
+    result = await wrapped.get_media(message_id="m1", chat_jid="other@g.us")
+    assert result == {"data": b"abc", "mimetype": "image/jpeg", "filename": None}
+    inner.get_media.assert_awaited_once_with(message_id="m1", chat_jid="other@g.us")

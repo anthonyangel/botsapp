@@ -11,8 +11,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.utilities.types import Audio, File, Image
 
-import botsapp.state as state
 from botsapp.bridge import GroupInfo, SendResult
 from botsapp.message_store import ChatNotAllowedError
 from botsapp.tools import (
@@ -597,27 +597,132 @@ async def test_get_chat_metadata_not_allowed_returns_error(mock_db: AsyncMock):
 # ── Media ─────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture(autouse=True)
-def _reset_media_dir():
-    """state.media_dir isn't touched by conftest's autouse fixture, so
-    make sure a value set by one test never leaks into the next."""
-    yield
-    state.media_dir = None
-
-
-async def test_get_media_returns_thumbnail_when_allowed(
-    mock_db: AsyncMock, mock_message_store: AsyncMock, tmp_path
-):
+async def test_get_media_returns_image_for_photo(mock_db: AsyncMock, mock_message_store: AsyncMock):
     mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
     mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
     jpeg_bytes = b"\xff\xd8\xff\xe0fake-jpeg-data"
-    (tmp_path / "M1.jpg").write_bytes(jpeg_bytes)
-    state.media_dir = tmp_path
+    mock_message_store.get_media.return_value = {
+        "data": jpeg_bytes,
+        "mimetype": "image/jpeg",
+        "filename": None,
+    }
 
     result = await get_media(message_id="M1")
 
     mock_message_store.get_message_chat_jid.assert_awaited_once_with(message_id="M1")
+    mock_message_store.get_media.assert_awaited_once_with(message_id="M1", chat_jid="allowed@g.us")
+    assert isinstance(result, Image)
     assert result.data == jpeg_bytes
+
+
+async def test_get_media_returns_audio_for_voice_note(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    # WhatsApp voice notes ("ptt" messages) come back from WAHA as
+    # audio/ogg with a codec parameter — must be stripped down to a plain
+    # "ogg" format, not passed through verbatim.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)  # no transcription attempt
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    ogg_bytes = b"OggS-fake-opus-bytes"
+    mock_message_store.get_media.return_value = {
+        "data": ogg_bytes,
+        "mimetype": "audio/ogg; codecs=opus",
+        "filename": None,
+    }
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, Audio)
+    assert result.data == ogg_bytes
+    assert result.to_audio_content().mime_type == "audio/ogg"
+
+
+async def test_get_media_attaches_transcript_for_voice_note(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    # A voice note is unreadable to the model as raw bytes — get_media()
+    # attaches a transcript alongside the audio when one's available,
+    # rather than leaving Claude with an opaque blob it can't interpret.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    ogg_bytes = b"OggS-fake-opus-bytes"
+    mock_message_store.get_media.return_value = {
+        "data": ogg_bytes,
+        "mimetype": "audio/ogg; codecs=opus",
+        "filename": None,
+    }
+    transcribe_mock = AsyncMock(return_value="Hi, it's on the fifth floor.")
+    monkeypatch.setattr("botsapp.tools.transcribe_audio", transcribe_mock)
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, list)
+    assert isinstance(result[0], Audio)
+    assert result[0].data == ogg_bytes
+    assert result[1] == "Hi, it's on the fifth floor."
+    transcribe_mock.assert_awaited_once_with(ogg_bytes, "audio/ogg; codecs=opus", None)
+
+
+async def test_get_media_returns_audio_alone_when_transcription_unavailable(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    # transcribe_audio() itself is best-effort (no API key configured, or
+    # the request failed) and returns None in that case — get_media() must
+    # still succeed with just the audio, not error or wait forever.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    ogg_bytes = b"OggS-fake-opus-bytes"
+    mock_message_store.get_media.return_value = {
+        "data": ogg_bytes,
+        "mimetype": "audio/ogg; codecs=opus",
+        "filename": None,
+    }
+    monkeypatch.setattr("botsapp.tools.transcribe_audio", AsyncMock(return_value=None))
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, Audio)
+    assert result.data == ogg_bytes
+
+
+async def test_get_media_does_not_attempt_transcription_for_non_audio(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    mock_message_store.get_media.return_value = {
+        "data": b"\xff\xd8\xff\xe0fake-jpeg-data",
+        "mimetype": "image/jpeg",
+        "filename": None,
+    }
+    transcribe_mock = AsyncMock()
+    monkeypatch.setattr("botsapp.tools.transcribe_audio", transcribe_mock)
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, Image)
+    transcribe_mock.assert_not_awaited()
+
+
+async def test_get_media_returns_file_for_video(mock_db: AsyncMock, mock_message_store: AsyncMock):
+    # No dedicated MCP content type for video — falls back to a generic
+    # File/embedded-resource, with the real mimetype preserved (not File's
+    # own "application/<format>" guess).
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    mp4_bytes = b"fake-mp4-bytes"
+    mock_message_store.get_media.return_value = {
+        "data": mp4_bytes,
+        "mimetype": "video/mp4",
+        "filename": None,
+    }
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, File)
+    assert result.data == mp4_bytes
+    assert result.to_resource_content().resource.mime_type == "video/mp4"
 
 
 async def test_get_media_not_allowed_raises(mock_db: AsyncMock, mock_message_store: AsyncMock):
@@ -627,35 +732,24 @@ async def test_get_media_not_allowed_raises(mock_db: AsyncMock, mock_message_sto
     with pytest.raises(ChatNotAllowedError):
         await get_media(message_id="M1")
 
+    mock_message_store.get_media.assert_not_awaited()
+
 
 async def test_get_media_unknown_message_id_raises(mock_message_store: AsyncMock):
     # message_id doesn't resolve to any chat at all — must not fall through
-    # to reading a thumbnail off disk just because a file happens to exist
-    # under that name.
+    # to fetching media for a chat that was never actually checked.
     mock_message_store.get_message_chat_jid.return_value = None
 
     with pytest.raises(ChatNotAllowedError):
         await get_media(message_id="unknown")
 
 
-async def test_get_media_not_allowed_does_not_touch_disk(
-    mock_db: AsyncMock, mock_message_store: AsyncMock, tmp_path
-):
-    mock_message_store.get_message_chat_jid.return_value = "other@g.us"
-    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
-    (tmp_path / "M1.jpg").write_bytes(b"thumbnail-bytes")
-    state.media_dir = tmp_path
-
-    with pytest.raises(ChatNotAllowedError):
-        await get_media(message_id="M1")
-
-
-async def test_get_media_missing_file_raises_not_found(
-    mock_db: AsyncMock, mock_message_store: AsyncMock, tmp_path
+async def test_get_media_no_media_raises_not_found(
+    mock_db: AsyncMock, mock_message_store: AsyncMock
 ):
     mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
     mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
-    state.media_dir = tmp_path
+    mock_message_store.get_media.return_value = None
 
     with pytest.raises(FileNotFoundError):
         await get_media(message_id="M1")

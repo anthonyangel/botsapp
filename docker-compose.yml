@@ -63,13 +63,13 @@ services:
       # with admin-ui via the metadata-data volume below (same file, both
       # processes, WAL mode handles the concurrent access).
       <<: *bridge-env
-      MEDIA_DIR: /app/media
       WORKOS_AUTHKIT_DOMAIN: ${WORKOS_AUTHKIT_DOMAIN}
       MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:8000}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS}
       LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
+      # Optional — voice-note transcription only, see .env.example.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
-      - mcp-media:/app/media
       - metadata-data:/app/data
     depends_on:
       waha:
@@ -100,7 +100,6 @@ services:
 volumes:
   waha-data:
   waha-media:
-  mcp-media:
   metadata-data:
 
 networks:

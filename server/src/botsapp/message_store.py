@@ -56,9 +56,9 @@ class MessageStore(Protocol):
         self, query: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]: ...
 
-    async def update_media_link(self, message_id: str, media_link: str) -> None: ...
-
     async def get_message_chat_jid(self, message_id: str) -> str | None: ...
+
+    async def get_media(self, message_id: str, chat_jid: str) -> dict[str, Any] | None: ...
 
 
 class AllowlistedMessageStore:
@@ -136,10 +136,6 @@ class AllowlistedMessageStore:
         filtered = [r for r in rows if r["jid"] in allowed]
         return filtered[offset : offset + limit]
 
-    async def update_media_link(self, message_id: str, media_link: str) -> None:
-        # Not chat-scoped in a way the allowlist applies to — delegate as-is.
-        await self._inner.update_media_link(message_id=message_id, media_link=media_link)
-
     async def get_message_chat_jid(self, message_id: str) -> str | None:
         # Deliberately unfiltered, unlike every other method here: the
         # caller (get_media) doesn't have a jid to check yet — resolving
@@ -148,3 +144,10 @@ class AllowlistedMessageStore:
         # get_chat_metadata/add_tag check explicitly via state.db rather
         # than through this wrapper.
         return await self._inner.get_message_chat_jid(message_id=message_id)
+
+    async def get_media(self, message_id: str, chat_jid: str) -> dict[str, Any] | None:
+        # Deliberately unfiltered, same reasoning as get_message_chat_jid
+        # above: tools.get_media() already resolved chat_jid via that call
+        # and checked it against the allowlist itself before ever calling
+        # this.
+        return await self._inner.get_media(message_id=message_id, chat_jid=chat_jid)
