@@ -19,13 +19,14 @@ primary_region = "fra"
   image = "devlikeapro/waha:latest"
 
 [[mounts]]
-  source = "waha_sessions"
-  destination = "/app/.sessions"
-  initial_size = "1gb"
-
-[[mounts]]
-  source = "waha_media"
-  destination = "/app/.media"
+  # One volume, not two: a Fly Machine only supports a single volume mount
+  # (confirmed by a real deploy failure — "invalid config.mounts, only 1
+  # volume supported"). Sessions and media both live under this one mount
+  # instead, in their own subdirectories — WAHA supports overriding the
+  # session-store base dir for exactly this kind of case (see
+  # WAHA_LOCAL_STORE_BASE_DIR below), it's not hardcoded to /app/.sessions.
+  source = "waha_data"
+  destination = "/app/data"
   initial_size = "1gb"
 
 [[vm]]
@@ -38,6 +39,7 @@ primary_region = "fra"
 
 [env]
   WHATSAPP_DEFAULT_ENGINE = "WEBJS"
-  WHATSAPP_FILES_FOLDER = "/app/.media"
+  WAHA_LOCAL_STORE_BASE_DIR = "/app/data/sessions"
+  WHATSAPP_FILES_FOLDER = "/app/data/media"
   WHATSAPP_FILES_LIFETIME = "0"
   # WAHA_API_KEY goes through `fly secrets set`, never here.
