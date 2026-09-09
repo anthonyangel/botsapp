@@ -50,6 +50,14 @@ tasks:
       - echo "Admin UI (QR code) → http://localhost:8100/"
       - docker compose logs -f waha
 
+  # ── Fly (deployed) ───────────────────────────────────────────────────────
+
+  admin-remote:
+    desc: Tunnel to the deployed admin UI (Fly) — private, no public listener
+    cmds:
+      - echo "Admin UI → http://localhost:8100/ (leave this running)"
+      - fly proxy 8100:8100 -a botsapp
+
   # ── Python / UV ───────────────────────────────────────────────────────────
 
   install:
