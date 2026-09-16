@@ -56,6 +56,10 @@ def client(monkeypatch):
         state.db.list_allowed_emails = AsyncMock(return_value=[])
         state.db.add_allowed_email = AsyncMock()
         state.db.remove_allowed_email = AsyncMock()
+        # Module-level, populated fresh by each /chats GET (see its own
+        # docstring) — reset between tests so one test's community jid
+        # can't leak into the next's redirect-tab lookup.
+        admin_app._community_jids.clear()
         admin_app._raw_store = AsyncMock()
         admin_app._raw_store.get_chats.return_value = []
         yield c
@@ -179,12 +183,58 @@ def test_chats_page_lists_groups_from_live_bridge_list_even_without_history(clie
     assert "Just us" in r.text
 
 
-def test_chats_page_marks_community_groups(client):
+def test_chats_page_splits_communities_into_their_own_tab(client):
+    # A WhatsApp Community is structurally a group (jid also ends "@g.us")
+    # but its own participant count is meaningless (just its admins, not
+    # real membership — see _community_row's docstring) — it gets its own
+    # tab, not a badge bolted onto the Groups table.
     state.bridge.list_groups.return_value = [
-        GroupInfo(jid="g1@g.us", name="Community HQ", is_community=True),
+        GroupInfo(jid="g1@g.us", name="Community HQ", is_community=True, participant_count=1),
+        GroupInfo(jid="g2@g.us", name="Regular Group", is_community=False, participant_count=5),
     ]
     r = client.get("/chats")
-    assert "Community" in r.text
+    assert r.status_code == 200
+    assert "#community-panel" in r.text
+    assert ">Communities<" in r.text
+
+    community_start = r.text.index('id="community-panel"')
+    community_end = r.text.index('id="newsletter-panel"')
+    community_section = r.text[community_start:community_end]
+    assert "Community HQ" in community_section
+    assert "Regular Group" not in community_section
+    assert ">Members<" not in community_section  # no member-count column at all
+
+    groups_section = r.text[r.text.index('id="groups-panel"') : community_start]
+    assert "Regular Group" in groups_section
+    assert "5 members" in groups_section
+    assert "Community HQ" not in groups_section
+
+
+def test_chats_page_shows_groups_loaded_gap(client):
+    # Regression test for the diagnosed live gap: WAHA's NOWEB engine can
+    # know about far more group *chats* (every real group jid ends
+    # "@g.us") than it has full group metadata for. Surface the gap
+    # instead of silently under-showing.
+    admin_app._raw_store.get_chats.return_value = [
+        {"jid": "g1@g.us", "name": "g1"},
+        {"jid": "g2@g.us", "name": "g2"},  # no metadata from list_groups()
+    ]
+    state.bridge.list_groups.return_value = [
+        GroupInfo(jid="g1@g.us", name="Group One"),
+    ]
+    r = client.get("/chats")
+    assert "Loaded 1/2 groups" in r.text
+
+
+def test_chats_page_hides_groups_loaded_note_once_caught_up(client):
+    admin_app._raw_store.get_chats.return_value = [
+        {"jid": "g1@g.us", "name": "g1"},
+    ]
+    state.bridge.list_groups.return_value = [
+        GroupInfo(jid="g1@g.us", name="Group One"),
+    ]
+    r = client.get("/chats")
+    assert "groups loaded" not in r.text.lower()
 
 
 def test_chats_page_hides_status_tab_when_never_seen(client):
@@ -201,6 +251,39 @@ def test_chats_page_shows_status_tab_when_seen(client):
     r = client.get("/chats")
     assert "Status/Stories" in r.text
     assert ">Status<" in r.text
+
+
+def test_chats_page_separates_newsletters_into_their_own_tab(client):
+    # @newsletter (WhatsApp Channels) jids must not be lumped into the
+    # direct-chats tab — they get their own, alongside Chats/Groups.
+    admin_app._raw_store.get_chats.return_value = [
+        {"jid": "123@newsletter", "name": "Tech News"},
+        {"jid": "155@s.whatsapp.net", "name": "155"},
+    ]
+    r = client.get("/chats")
+    assert r.status_code == 200
+    assert "Tech News" in r.text
+    assert "#newsletter-panel" in r.text
+    assert ">Newsletters<" in r.text
+
+
+def test_chats_page_shows_country_flag_for_direct_chat(client):
+    admin_app._raw_store.get_chats.return_value = [
+        {"jid": "972501234567@s.whatsapp.net", "name": "972501234567"},
+    ]
+    r = client.get("/chats")
+    assert "🇮🇱" in r.text
+    assert "+972" in r.text
+
+
+def test_chats_page_omits_country_flag_for_unresolvable_jid(client):
+    # An @lid contact never resolved to a phone jid — no crash, just no flag.
+    admin_app._raw_store.get_chats.return_value = [
+        {"jid": "12345@lid", "name": "Mystery"},
+    ]
+    r = client.get("/chats")
+    assert r.status_code == 200
+    assert "Mystery" in r.text
 
 
 def test_chats_page_shows_placeholder_when_empty(client):
@@ -230,6 +313,18 @@ def test_toggle_allowed_redirects_to_chats_tab_for_direct_chat(client):
         "/chats/155@s.whatsapp.net/allow", data={"is_allowed": "on"}, follow_redirects=False
     )
     assert r.headers["location"] == "/chats#direct-panel"
+
+
+def test_toggle_allowed_redirects_to_community_tab(client):
+    # _classify() can't tell a community from an ordinary group on jid
+    # alone (both end "@g.us") — a prior /chats load must have populated
+    # _community_jids for this redirect to land on the right tab.
+    state.bridge.list_groups.return_value = [
+        GroupInfo(jid="g1@g.us", name="Community HQ", is_community=True),
+    ]
+    client.get("/chats")
+    r = client.post("/chats/g1@g.us/allow", data={"is_allowed": "on"}, follow_redirects=False)
+    assert r.headers["location"] == "/chats#community-panel"
 
 
 def test_toggle_allowed_redirects_to_status_tab(client):
