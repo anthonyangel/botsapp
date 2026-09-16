@@ -1,0 +1,107 @@
+# Shared by mcp-server and admin-ui below via the `<<: *bridge-env` merge
+# key — both processes must agree on bridge/db config, so it's declared
+# once here instead of twice.
+x-bridge-env: &bridge-env
+  DATABASE_URL: /app/data/chat_metadata.db
+  WAHA_URL: http://waha:3000
+  WAHA_API_KEY: ${WAHA_API_KEY:-}
+  WAHA_SESSION: ${WAHA_SESSION:-default}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  TZ: Asia/Jerusalem
+
+services:
+  waha:
+    # WHATSAPP_DEFAULT_ENGINE=WEBJS is deliberate: WAHA's other engines
+    # (NOWEB/GOWS) are protocol reimplementations and hit the same class of
+    # upstream WhatsApp protocol breakage (companion_reg_refresh). WEBJS
+    # drives real Chromium against the actual WhatsApp Web site instead,
+    # sidestepping that specific class of bug.
+    #
+    # WAHA_IMAGE: the plain `latest`/`chrome` tag has no arm64 build as of
+    # this writing — Apple Silicon hosts need an `-arm` tagged image.
+    # Specifically `dev-arm`, not the stable `arm` tag: `arm` (2026.8.2, as
+    # of this writing) hits a real bug — "Cmd.refreshQR is not a function"
+    # inside WAHA's own headless Chromium page, breaking QR pairing outright
+    # — while `dev-arm` (2026.9.1) does not; pairing was verified working on
+    # `dev-arm` directly. Re-check whether a newer stable tag has picked up
+    # the fix before moving off `dev-arm`. Override
+    # to a non-`-arm` tag for typical x86_64 deployment hosts.
+    image: ${WAHA_IMAGE:-devlikeapro/waha:dev-arm}
+    shm_size: "2gb"  # headless Chromium needs real /dev/shm or it crashes
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: WEBJS
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      # Local-file media storage (WAHA's own default) but with persistence
+      # turned on: the actual WAHA default is a 180-second lifetime, which
+      # silently deletes received media before
+      # get_media() has any real chance of being called for it. Postgres/S3
+      # are WAHA's other media-storage options; local files stay right for
+      # this deployment (family-scale, single host, same reasoning as the
+      # metadata store) — it just needs telling not to expire.
+      WHATSAPP_FILES_FOLDER: /app/.media
+      WHATSAPP_FILES_LIFETIME: "0"
+    volumes:
+      - waha-data:/app/.sessions
+      - waha-media:/app/.media
+    # Loopback-only: this is WAHA's own REST API. It should never be
+    # reachable from outside this machine, even in local dev.
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - whatsapp-network
+    restart: unless-stopped
+
+  mcp-server:
+    # The only service meant to be reachable beyond this machine — its own
+    # public Fly app once deployed, gated by AuthKit login. Still
+    # loopback-only here for local dev.
+    build: ./server
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      # DATABASE_URL (in x-bridge-env above) is a SQLite file path, shared
+      # with admin-ui via the metadata-data volume below (same file, both
+      # processes, WAL mode handles the concurrent access).
+      <<: *bridge-env
+      WORKOS_AUTHKIT_DOMAIN: ${WORKOS_AUTHKIT_DOMAIN}
+      MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:8000}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS}
+      LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
+      # Optional — voice-note transcription only, see .env.example.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - metadata-data:/app/data
+    depends_on:
+      waha:
+        condition: service_started
+    networks:
+      - whatsapp-network
+    restart: unless-stopped
+
+  admin-ui:
+    # Network-private by design — no login of its own, so it must never get
+    # a non-loopback port binding here, and never a public Fly service when
+    # deployed. Same image as mcp-server, different entrypoint.
+    build: ./server
+    command: ["uv", "run", "uvicorn", "botsapp.admin_main:app", "--host", "0.0.0.0", "--port", "8100"]
+    ports:
+      - "127.0.0.1:8100:8100"
+    environment:
+      <<: *bridge-env
+    volumes:
+      - metadata-data:/app/data
+    depends_on:
+      waha:
+        condition: service_started
+    networks:
+      - whatsapp-network
+    restart: unless-stopped
+
+volumes:
+  waha-data:
+  waha-media:
+  metadata-data:
+
+networks:
+  whatsapp-network:
+    driver: bridge

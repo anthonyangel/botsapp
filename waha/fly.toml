@@ -1,0 +1,45 @@
+# Fly app for the WAHA bridge — see docs/decisions/0010/0013. No
+# [http_service] or [[services]] block at all, deliberately: this app must
+# never be reachable beyond Fly's private 6PN networking (reached from
+# botsapp as http://botsapp-waha.internal:3000) / `fly proxy` from a laptop.
+#
+# App name is a placeholder — set at `fly apps create` time; `app` here
+# must match whatever name actually got created, and server/fly.toml's
+# WAHA_URL must be updated to match if it's ever renamed.
+app = "botsapp-waha"
+primary_region = "fra"
+
+[build]
+  # NOT dev-arm here: that tag is arm64-only (Apple Silicon, for local
+  # Compose — see docs/decisions/0007's note and docker-compose.yml's
+  # WAHA_IMAGE override), and Fly Machines default to amd64. Confirmed by
+  # a real deploy failure ("does not support amd64 architecture for linux
+  # os") before landing on this tag — the arm-tag QR-pairing bug that note
+  # describes is specific to the `arm` tag, not this one.
+  image = "devlikeapro/waha:latest"
+
+[[mounts]]
+  # One volume, not two: a Fly Machine only supports a single volume mount
+  # (confirmed by a real deploy failure — "invalid config.mounts, only 1
+  # volume supported"). Sessions and media both live under this one mount
+  # instead, in their own subdirectories — WAHA supports overriding the
+  # session-store base dir for exactly this kind of case (see
+  # WAHA_LOCAL_STORE_BASE_DIR below), it's not hardcoded to /app/.sessions.
+  source = "waha_data"
+  destination = "/app/data"
+  initial_size = "1gb"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  # WEBJS drives real headless Chromium — give it real memory, not the
+  # smallest tier. /dev/shm sizing on Fly Machines isn't the same knob as
+  # docker-compose's explicit shm_size: 2gb; watch logs after first deploy
+  # for a Chromium shm crash and bump this if it happens.
+  memory = "1gb"
+
+[env]
+  WHATSAPP_DEFAULT_ENGINE = "WEBJS"
+  WAHA_LOCAL_STORE_BASE_DIR = "/app/data/sessions"
+  WHATSAPP_FILES_FOLDER = "/app/data/media"
+  WHATSAPP_FILES_LIFETIME = "0"
+  # WAHA_API_KEY goes through `fly secrets set`, never here.

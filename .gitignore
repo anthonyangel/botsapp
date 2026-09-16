@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# macOS
+.DS_Store
+
+# Claude Code local-only settings (see .claude/settings.json for shared config)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# `workos seed` run state — regenerated locally, not source of truth
+.workos-seed-state.json

@@ -1,0 +1,122 @@
+version: "3"
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmd: task --list
+
+  # ── Docker ────────────────────────────────────────────────────────────────
+
+  up:
+    desc: Build mcp-server image (if needed) then start all services
+    deps: [build]
+    cmd: docker compose up -d
+
+  down:
+    desc: Stop all services
+    cmd: docker compose down
+
+  down-v:
+    desc: "Stop all services and DELETE volumes (destructive – wipes DB)"
+    prompt: This will delete all persisted data. Continue?
+    cmd: docker compose down -v
+
+  restart:
+    desc: Restart all services
+    cmd: docker compose restart
+
+  build:
+    desc: Rebuild the mcp-server Docker image
+    cmd: docker compose build mcp-server
+
+  ps:
+    desc: Show service status
+    cmd: docker compose ps
+
+  logs:
+    desc: "Tail logs for one service: task logs -- waha"
+    cmd: docker compose logs -f {{.CLI_ARGS}}
+
+  shell:
+    desc: Open a bash shell inside the running mcp-server container
+    cmd: docker compose exec mcp-server bash
+
+  # ── WhatsApp / WAHA ───────────────────────────────────────────────────────
+
+  qr:
+    desc: Tail waha logs (scan the QR code at http://localhost:8100/ on first run)
+    cmds:
+      - echo "Admin UI (QR code) → http://localhost:8100/"
+      - docker compose logs -f waha
+
+  # ── Fly (deployed) ───────────────────────────────────────────────────────
+
+  admin-remote:
+    desc: Tunnel to the deployed admin UI (Fly) — private, no public listener
+    cmds:
+      - echo "Admin UI → http://localhost:8100/ (leave this running)"
+      - fly proxy 8100:8100 -a botsapp
+
+  # ── Python / UV ───────────────────────────────────────────────────────────
+
+  install:
+    desc: Install Python deps including dev extras
+    dir: server
+    cmd: uv sync --all-extras
+
+  test:
+    desc: "Run unit tests (extra args forwarded: task test -- -k send)"
+    deps: [install]
+    dir: server
+    cmd: uv run pytest {{.CLI_ARGS}}
+
+  test-cov:
+    desc: Run unit tests with a coverage report
+    deps: [install]
+    dir: server
+    cmd: uv run pytest --cov=botsapp --cov-report=term-missing
+
+  lint:
+    desc: Run ruff linter
+    deps: [install]
+    dir: server
+    cmd: uv run ruff check src tests
+
+  typecheck:
+    desc: Run ty (see pyproject.toml's [tool.ty] for config, including the test-mocking overrides)
+    deps: [install]
+    dir: server
+    cmd: uv run ty check
+
+  fmt:
+    desc: Auto-format and fix lint issues
+    deps: [install]
+    dir: server
+    cmds:
+      - uv run ruff format src tests
+      - uv run ruff check --fix src tests
+
+  fmt-check:
+    desc: Verify formatting without modifying files (useful in CI)
+    deps: [install]
+    dir: server
+    cmds:
+      - uv run ruff format --check src tests
+      - uv run ruff check src tests
+
+  check:
+    desc: Run lint + typecheck + tests (mirrors CI)
+    deps: [install]
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
+
+  # ── Integration test ──────────────────────────────────────────────────────
+
+  integration-test:
+    desc: |
+      End-to-end test via Claude API.
+      Requires: services running (task up) + ANTHROPIC_API_KEY in .env.
+    cmd: uv run test_mcp_local.py
