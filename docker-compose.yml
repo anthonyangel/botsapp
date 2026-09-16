@@ -31,15 +31,21 @@ services:
     environment:
       WHATSAPP_DEFAULT_ENGINE: WEBJS
       WAHA_API_KEY: ${WAHA_API_KEY}
-      # Local-file media storage (WAHA's own default) but with persistence
-      # turned on: the actual WAHA default is a 180-second lifetime, which
-      # silently deletes received media before
-      # get_media() has any real chance of being called for it. Postgres/S3
-      # are WAHA's other media-storage options; local files stay right for
+      # Local-file media storage (WAHA's own default). The actual WAHA
+      # default is a 180-second lifetime, which silently deletes received
+      # media before get_media() has any real chance of being called for
+      # it, so this bumps it instead of leaving it unset. Postgres/S3 are
+      # WAHA's other media-storage options; local files stay right for
       # this deployment (family-scale, single host, same reasoning as the
-      # metadata store) — it just needs telling not to expire.
+      # metadata store).
+      #
+      # 7 days, in seconds — was "0" (never expire) until that unbounded
+      # growth filled the deployed Fly volume and caused an ENOSPC outage;
+      # see docs/decisions/0016 (supersedes the media half of 0007). Kept
+      # in sync with waha/fly.toml's value rather than letting local dev
+      # and production disagree on retention.
       WHATSAPP_FILES_FOLDER: /app/.media
-      WHATSAPP_FILES_LIFETIME: "0"
+      WHATSAPP_FILES_LIFETIME: "604800"
     volumes:
       - waha-data:/app/.sessions
       - waha-media:/app/.media
@@ -65,7 +71,9 @@ services:
       <<: *bridge-env
       WORKOS_AUTHKIT_DOMAIN: ${WORKOS_AUTHKIT_DOMAIN}
       MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:8000}
-      ALLOWED_EMAILS: ${ALLOWED_EMAILS}
+      # No ALLOWED_EMAILS here — the email allowlist lives in the DB, set
+      # via the admin UI's Access tab. See
+      # docs/decisions/0015-email-allowlist-in-db.md.
       LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
       # Optional — voice-note transcription only, see .env.example.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

@@ -41,14 +41,17 @@ LOCAL_DEV_DISABLE_AUTH = os.getenv("LOCAL_DEV_DISABLE_AUTH", "").strip().lower()
 )
 
 
-def allowed_family_email(ctx: AuthContext) -> bool:
-    """Global auth check: only the family emails in ALLOWED_EMAILS may call anything."""
-    allowed = {e.strip().lower() for e in os.environ["ALLOWED_EMAILS"].split(",") if e.strip()}
+async def allowed_family_email(ctx: AuthContext) -> bool:
+    """Global auth check: only emails in the admin UI's email allowlist may
+    call anything. Stored in the shared SQLite DB (state.db), not an env
+    var — see docs/decisions/0015-email-allowlist-in-db.md for why. fastmcp's
+    AuthCheck accepts sync or async callables (it awaits the result either
+    way), so this can query the DB directly rather than cache/env-parse."""
     token = ctx.token
     email = (token.claims.get("email") or "").lower() if token else None
-    if not email or email not in allowed:
+    if not email or state.db is None or not await state.db.is_email_allowed(email):
         raise AuthorizationError(
-            f"Access denied: {email or 'unauthenticated caller'} is not on ALLOWED_EMAILS"
+            f"Access denied: {email or 'unauthenticated caller'} is not on the email allowlist"
         )
     return True
 

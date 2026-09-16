@@ -68,6 +68,22 @@ def _from_waha_jid(chat_id: str) -> str:
     return chat_id
 
 
+def _looks_like_masked_phone(name: str) -> bool:
+    """WAHA/WhatsApp can hand back a contact's "name" field as the phone
+    number with its middle digits privacy-masked — e.g. "+972∙∙∙∙∙∙∙87"
+    (U+2219 BULLET OPERATOR) — instead of an actual saved display name.
+    Confirmed live under NOWEB for a contact that *is* saved on the phone:
+    WhatsApp still hands the companion/NOWEB session this masked form as
+    "name", while the contact's own broadcast "pushname" (e.g. their real
+    name) comes through unmasked in the same contact record. A string made
+    of nothing but digits/"+"/this mask character carries no more info
+    than the raw phone number already does, so treat it as absent and let
+    _contact_from_raw fall through to pushname instead.
+    """
+    stripped = name.strip()
+    return bool(stripped) and all(ch in "0123456789+∙" for ch in stripped)
+
+
 def _serialized_id(value: Any) -> str:
     """WAHA is inconsistent about how it shapes an "id" field: the
     dedicated /messages endpoint flattens it to a plain string, but
@@ -210,15 +226,31 @@ class WAHAClient:
             return SessionStatus(errors=[f"WAHA error: {exc}"])
         except Exception as exc:
             return SessionStatus(errors=[f"Cannot reach WAHA: {exc}"])
+        if data.get("status") == "STARTING":
+            # Wait up to ~10 s for WAHA to leave STARTING before we return.
+            # 5 × 2 s: short enough that callers (3 s poll, meta-refresh)
+            # still see a timely transition to SCAN_QR_CODE / WORKING, but
+            # long enough to bridge the typical cold-start window. Exit as
+            # soon as the status changes rather than sleeping the full duration.
+            for _ in range(5):
+                await asyncio.sleep(2)
+                try:
+                    data = await self._get(f"/api/sessions/{self._session_name}")
+                    if data.get("status") != "STARTING":
+                        break
+                except Exception:
+                    pass
+        waha_status = data.get("status", "")
         status = self._status_from_session(data)
-        if status.connected and not status.logged_in and not status.qr_code:
+        if waha_status == "SCAN_QR_CODE" and not status.qr_code:
             # WAHA's own session-status payload never embeds the QR
             # (confirmed live — GET /api/sessions/{name} has no "qr"
             # key even mid SCAN_QR_CODE); it only comes from the dedicated
-            # auth/qr endpoint. Without this, a plain poll (the page's
-            # background refresh, or a reload after the initial "Connect"
-            # click's redirect) would show a blank QR card forever — only
-            # the one-off connect() fetch would ever see it.
+            # auth/qr endpoint. Guard on the raw waha_status rather than
+            # the derived SessionStatus fields: STARTING also satisfies
+            # (connected=True, logged_in=False, qr_code=None), and calling
+            # the QR endpoint while still STARTING causes WAHA to block for
+            # its own internal 10 s timeout before returning a 422.
             try:
                 status.qr_code = await self._get_qr_base64()
             except Exception as exc:
@@ -236,17 +268,27 @@ class WAHAClient:
 
         try:
             if existing is None:
-                await self._post("/api/sessions", {"name": self._session_name, "start": True})
+                await self._post(
+                    "/api/sessions",
+                    {
+                        "name": self._session_name,
+                        "start": True,
+                        # Required for the NOWEB engine (see waha/fly.toml's
+                        # WHATSAPP_DEFAULT_ENGINE note): WAHA's chat/message-
+                        # history endpoints 400 with "Enable NOWEB store"
+                        # unless the store was turned on at session-creation
+                        # time — it can't be toggled after pairing without
+                        # losing history, so it has to be set here, not
+                        # patched in later. fullSync=True trades a longer
+                        # initial sync for ~1yr/100k-msg history instead of
+                        # NOWEB's ~3-month default; harmless no-op under
+                        # WEBJS, which ignores config.noweb entirely.
+                        "config": {"noweb": {"store": {"enabled": True, "fullSync": True}}},
+                    },
+                )
             elif existing.get("status") in ("STOPPED", "FAILED"):
                 # WAHA's own guidance for a dead session (whether never-
                 # started or crashed mid-pairing): restart, not start.
-                # /start alone only works from STOPPED — a session stuck in
-                # FAILED (e.g. the WEBJS post-auth re-injection timeout)
-                # silently no-ops on /start and the
-                # "Connect" button would otherwise do nothing. /restart
-                # stops-then-starts either way and doesn't need a re-scan
-                # unless the session was never fully authenticated to begin
-                # with (true here — FAILED means it wasn't).
                 await self._post(f"/api/sessions/{self._session_name}/restart", {})
             # else: already STARTING/SCAN_QR_CODE/WORKING — nothing to do,
             # just read status (and QR) below.
@@ -262,11 +304,27 @@ class WAHAClient:
         return await self.get_session_status()
 
     async def disconnect(self) -> SendResult:
+        # /logout deregisters the session from WhatsApp's servers gracefully,
+        # but blocks until the browser job finishes — up to 60 s when Chromium
+        # is mid-load. /stop just kills the browser process immediately and
+        # leaves the session in STOPPED state, which is all we need to allow
+        # a fresh QR-scan. Use /stop unless the session is genuinely WORKING
+        # (i.e. already paired), where a proper logout from WA's servers matters.
         try:
-            await self._post(f"/api/sessions/{self._session_name}/logout", {})
+            data = await self._get(f"/api/sessions/{self._session_name}")
+            is_working = data.get("status") == "WORKING"
+        except Exception:
+            is_working = False
+
+        endpoint = "logout" if is_working else "stop"
+        try:
+            await self._post(f"/api/sessions/{self._session_name}/{endpoint}", {})
         except Exception as exc:
+            # /stop can 422 if the session is already stopped — ignore.
+            if endpoint == "stop" and "422" in str(exc):
+                return SendResult(success=True, details="Already stopped")
             return SendResult(success=False, details=str(exc))
-        return SendResult(success=True, details="Logged out")
+        return SendResult(success=True, details="Logged out" if is_working else "Stopped")
 
     def _status_from_session(self, data: dict[str, Any]) -> SessionStatus:
         waha_status = data.get("status", "")
@@ -402,6 +460,13 @@ class WAHAClient:
 
     async def list_groups(self) -> list[GroupInfo]:
         groups = await self._get(f"/api/{self._session_name}/groups")
+        # Shape differs by engine: WEBJS returns a JSON array; NOWEB returns
+        # an object keyed by group jid (confirmed live) — iterating a dict
+        # directly yields its string keys, not the group objects, which is
+        # why this crashed with "'str' object has no attribute 'get'" after
+        # the WEBJS->NOWEB engine swap (see waha/fly.toml).
+        if isinstance(groups, dict):
+            groups = list(groups.values())
         return [self._group_from_raw(g) for g in (groups or [])]
 
     async def get_group_info(self, group_jid: str) -> GroupInfo:
@@ -783,14 +848,15 @@ class WAHAClient:
 
     @staticmethod
     def _group_from_raw(g: dict[str, Any]) -> GroupInfo:
-        # /api/{session}/groups shares /chats' shape (nested "id", see
-        # _serialized_id) — and the fields that actually matter here
-        # (subject/participants/community flag) live one level down under
-        # "groupMetadata", not at the top level as originally guessed.
-        # Confirmed live for id/name/participants/isParentGroup; "desc" for
-        # the topic text is WhatsApp's usual internal field name for this
-        # but wasn't directly confirmed (no group with a topic set to test
-        # against).
+        # Shape differs by engine (see list_groups()'s comment on the dict-
+        # vs-array split for the same swap): under WEBJS, the fields that
+        # matter here live one level down under "groupMetadata"; under
+        # NOWEB (confirmed live), /api/{session}/groups and
+        # /groups/{jid} both return them flat at the top level instead
+        # ("subject" for name, "isCommunity" directly) — check both.
+        # "desc" for the topic text is WhatsApp's usual internal field name
+        # for this but wasn't directly confirmed under either engine (no
+        # group with a topic set to test against).
         meta = g.get("groupMetadata") or {}
         participants = meta.get("participants") or g.get("participants") or []
         # Exclude departed members here too, matching get_group_info()'s
@@ -803,20 +869,24 @@ class WAHAClient:
         ]
         return GroupInfo(
             jid=_serialized_id(g.get("id") or meta.get("id") or ""),
-            name=g.get("name") or meta.get("subject") or "",
-            topic=meta.get("desc") or meta.get("description") or "",
+            name=g.get("name") or meta.get("subject") or g.get("subject") or "",
+            topic=meta.get("desc") or meta.get("description") or g.get("desc") or "",
             participant_count=len(active_participant_ids),
             participants=active_participant_ids,
-            is_community=bool(meta.get("isParentGroup") or meta.get("isCommunity")),
+            is_community=bool(
+                meta.get("isParentGroup") or meta.get("isCommunity") or g.get("isCommunity")
+            ),
             invite_link=g.get("invite") or meta.get("invite") or None,
         )
 
     @staticmethod
     def _contact_from_raw(c: dict[str, Any]) -> ContactInfo:
         jid = c.get("id", "")
+        raw_name = c.get("name") or ""
+        name = "" if _looks_like_masked_phone(raw_name) else raw_name
         return ContactInfo(
             jid=_from_waha_jid(jid) if jid else "",
-            name=c.get("name") or c.get("pushname") or c.get("shortName") or jid,
+            name=name or c.get("pushname") or c.get("shortName") or jid,
             phone_number=c.get("number", ""),
             is_on_whatsapp=c.get("isWAContact"),
         )

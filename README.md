@@ -37,8 +37,11 @@ Nothing is visible to the MCP server until you do this — see
 ### WorkOS AuthKit setup
 
 The MCP server itself (**http://localhost:8000**) normally requires AuthKit
-login — only emails in `ALLOWED_EMAILS` (`.env`) can call any tool. To
-actually log in via claude.ai:
+login — only emails on the allowlist at **http://localhost:8100/access**
+(the admin UI's Access tab, backed by the same shared DB as the chat
+allowlist — see [docs/decisions/0015](docs/decisions/0015-email-allowlist-in-db.md))
+can call any tool. Nobody can use the MCP server until you add at least one
+email there. To actually log in via claude.ai:
 
 Driven with the [`workos` CLI](https://github.com/workos/cli) rather than
 clicking through the Dashboard by hand:
@@ -85,8 +88,8 @@ no WorkOS project needed just to run the stack and poke at `/mcp` directly.
 Outbound/write tools stay blocked regardless (see
 [docs/decisions/0003](docs/decisions/0003-google-oauth-authn-authz.md)) —
 this only removes the login step. **Unset it (or set it to `false`)
-before this server is reachable by anyone but you** — with it on,
-`ALLOWED_EMAILS` isn't enforced and anyone who can reach the server can
+before this server is reachable by anyone but you** — with it on, the
+email allowlist isn't enforced and anyone who can reach the server can
 read every allowed chat.
 
 ### Running the test suite / linting
