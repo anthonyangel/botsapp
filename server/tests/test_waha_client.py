@@ -364,9 +364,31 @@ async def test_connect_restarts_failed_session(client, aresponses):
 
 
 async def test_disconnect_success(client, aresponses):
+    # disconnect() checks status first to pick logout (WORKING) vs stop
+    # (anything else) — see its own docstring/comment.
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/sessions/{SESSION}",
+        payload={"status": "WORKING", "me": None},
+    )
     _mock(aresponses, "post", f"{BASE_URL}/api/sessions/{SESSION}/logout", payload={})
     result = await client.disconnect()
     assert result.success is True
+    assert result.details == "Logged out"
+
+
+async def test_disconnect_not_working_uses_stop(client, aresponses):
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/sessions/{SESSION}",
+        payload={"status": "STOPPED", "me": None},
+    )
+    _mock(aresponses, "post", f"{BASE_URL}/api/sessions/{SESSION}/stop", payload={})
+    result = await client.disconnect()
+    assert result.success is True
+    assert result.details == "Stopped"
 
 
 # ── Messaging ─────────────────────────────────────────────────────────────
@@ -466,6 +488,35 @@ async def test_list_groups_excludes_left_participants(client, aresponses):
     assert groups[0].participant_count == 1
 
 
+async def test_list_groups_noweb_shape(client, aresponses):
+    # Real shape under the NOWEB engine (confirmed live): the endpoint
+    # returns an object keyed by group jid rather than a JSON array, and
+    # the fields that matter live flat at the top level instead of nested
+    # under "groupMetadata" — see waha/fly.toml's WHATSAPP_DEFAULT_ENGINE
+    # note. Regression test for the "'str' object has no attribute 'get'"
+    # crash this shape caused when iterated as if it were a list.
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/{SESSION}/groups",
+        payload={
+            "g1@g.us": {
+                "id": "g1@g.us",
+                "subject": "Family",
+                "isCommunity": False,
+                "participants": [
+                    {"id": "a@lid", "phoneNumber": "a@c.us"},
+                    {"id": "b@lid", "phoneNumber": "b@c.us"},
+                ],
+            },
+        },
+    )
+    groups = await client.list_groups()
+    assert groups[0].jid == "g1@g.us"
+    assert groups[0].name == "Family"
+    assert groups[0].participant_count == 2
+
+
 async def test_get_group_info_fetches_participants_v2(client, aresponses):
     _mock(
         aresponses,
@@ -504,6 +555,43 @@ async def test_get_contacts_excludes_groups_and_translates_jid(client, aresponse
     contacts = await client.get_contacts()
     assert len(contacts) == 1
     assert contacts[0].jid == "1@s.whatsapp.net"
+    assert contacts[0].name == "Bob"
+
+
+async def test_get_contacts_prefers_pushname_over_masked_phone_name(client, aresponses):
+    # Real shape (confirmed live): NOWEB can hand back "name" as the phone
+    # number with its middle digits privacy-masked (e.g. "+972∙∙∙∙∙∙∙87")
+    # even for a contact saved on the phone, while "pushname" carries their
+    # actual (unmasked) name in the same record — prefer that.
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/contacts/all?session={SESSION}",
+        payload=[
+            {
+                "id": "972586881987@c.us",
+                "name": "+972∙∙∙∙∙∙∙87",
+                "pushname": "Danni Angel",
+                "isGroup": False,
+            },
+        ],
+    )
+    contacts = await client.get_contacts()
+    assert contacts[0].name == "Danni Angel"
+
+
+async def test_get_contacts_keeps_real_name_over_pushname(client, aresponses):
+    # A non-masked "name" (an actual saved contact name) still wins over
+    # pushname — only the masked-phone-number placeholder gets skipped.
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/contacts/all?session={SESSION}",
+        payload=[
+            {"id": "1@c.us", "name": "Bob", "pushname": "bobby123", "isGroup": False},
+        ],
+    )
+    contacts = await client.get_contacts()
     assert contacts[0].name == "Bob"
 
 

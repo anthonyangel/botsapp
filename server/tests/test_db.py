@@ -144,3 +144,45 @@ async def test_set_chat_allowed_does_not_touch_tags(db: DatabaseManager):
     assert result is not None
     assert result["tags"] == ["vip"]
     assert result["is_allowed"] is True
+
+
+# ── email allowlist ──────────────────────────────────────────────────────
+# Who may authenticate to the MCP server at all (app.py's
+# allowed_family_email) — see docs/decisions/0015-email-allowlist-in-db.md.
+# Distinct from the chat allowlist above.
+
+
+async def test_is_email_allowed_false_when_empty(db: DatabaseManager):
+    assert await db.is_email_allowed("anthony@angelfamily.net") is False
+
+
+async def test_add_allowed_email_then_is_allowed(db: DatabaseManager):
+    await db.add_allowed_email("anthony@angelfamily.net")
+    assert await db.is_email_allowed("anthony@angelfamily.net") is True
+
+
+async def test_is_email_allowed_is_case_and_whitespace_insensitive(db: DatabaseManager):
+    await db.add_allowed_email("  Anthony@AngelFamily.NET  ")
+    assert await db.is_email_allowed("anthony@angelfamily.net") is True
+    assert await db.is_email_allowed("ANTHONY@ANGELFAMILY.NET") is True
+
+
+async def test_add_allowed_email_is_idempotent(db: DatabaseManager):
+    await db.add_allowed_email("anthony@angelfamily.net")
+    await db.add_allowed_email("anthony@angelfamily.net")
+    assert await db.list_allowed_emails() == ["anthony@angelfamily.net"]
+
+
+async def test_remove_allowed_email(db: DatabaseManager):
+    await db.add_allowed_email("anthony@angelfamily.net")
+    await db.remove_allowed_email("anthony@angelfamily.net")
+    assert await db.is_email_allowed("anthony@angelfamily.net") is False
+
+
+async def test_remove_allowed_email_missing_is_a_noop(db: DatabaseManager):
+    await db.remove_allowed_email("nobody@example.com")  # must not raise
+    assert await db.list_allowed_emails() == []
+
+
+async def test_list_allowed_emails_empty(db: DatabaseManager):
+    assert await db.list_allowed_emails() == []

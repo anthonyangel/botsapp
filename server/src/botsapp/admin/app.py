@@ -230,6 +230,27 @@ async def save_metadata(request: Request) -> Response:
     return _redirect_to_tab(jid)
 
 
+async def access_index(_request: Request) -> Response:
+    assert state.db is not None
+    emails = await state.db.list_allowed_emails()
+    return HTMLResponse(templates.access_page(emails, bridge_provider_name()))
+
+
+async def add_allowed_email(request: Request) -> Response:
+    assert state.db is not None
+    form = await request.form()
+    email = _form_str(form, "email").strip()
+    if email:
+        await state.db.add_allowed_email(email)
+    return RedirectResponse(url="/access", status_code=303)
+
+
+async def remove_allowed_email(request: Request) -> Response:
+    assert state.db is not None
+    await state.db.remove_allowed_email(request.path_params["email"])
+    return RedirectResponse(url="/access", status_code=303)
+
+
 app = Starlette(
     routes=[
         Route("/", session_index),
@@ -238,6 +259,9 @@ app = Starlette(
         Route("/chats", chats_index),
         Route("/chats/{jid}/allow", toggle_allowed, methods=["POST"]),
         Route("/chats/{jid}/metadata", save_metadata, methods=["POST"]),
+        Route("/access", access_index),
+        Route("/access/add", add_allowed_email, methods=["POST"]),
+        Route("/access/{email}/remove", remove_allowed_email, methods=["POST"]),
     ],
     lifespan=lifespan,
 )

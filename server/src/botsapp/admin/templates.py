@@ -125,6 +125,7 @@ def _page(title: str, body: str, bridge_name: str = "") -> str:
         <nav class="mdl-navigation">
           <a class="mdl-navigation__link" href="/">Session</a>
           <a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>
+          <a class="mdl-navigation__link" href="/access">Access</a>
         </nav>
       </div>
     </header>
@@ -770,3 +771,58 @@ def browse_page(
     </script>
     """
     return _page("Chats & Groups", body, bridge_name)
+
+
+def _allowed_email_row(email: str) -> str:
+    email_attr = html.escape(email, quote=True)
+    return f"""
+    <tr>
+      <td>{html.escape(email)}</td>
+      <td>
+        <form method="post" action="/access/{email_attr}/remove"
+              onsubmit="return confirm('Remove {email_attr} from the allowlist?');">
+          <button class="mdl-button mdl-js-button mdl-button--icon" type="submit" title="Remove">
+            <i class="material-icons">delete</i>
+          </button>
+        </form>
+      </td>
+    </tr>"""
+
+
+def access_page(emails: list[str], bridge_name: str = "") -> str:
+    """Who may authenticate to the MCP server at all — see
+    docs/decisions/0015-email-allowlist-in-db.md. Distinct from the chat
+    allowlist on /chats, which gates what an already-authenticated caller
+    can see, not who can log in."""
+    rows = (
+        "".join(_allowed_email_row(e) for e in emails)
+        if emails
+        else '<tr><td colspan="2" class="empty-state">No emails allowed yet — '
+        "nobody can use the MCP server until you add one.</td></tr>"
+    )
+    body = f"""
+    <p class="tab-note">
+      Only these emails may authenticate to the MCP server — this is who can
+      log in at all, separate from which chats a logged-in caller can see
+      (that's the Chats &amp; Groups tab). An AuthKit login from an email not
+      listed here is rejected after sign-in.
+    </p>
+    <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:480px;padding:24px;">
+      <form method="post" action="/access/add" style="display:flex;gap:12px;align-items:flex-end;">
+        <div class="mdl-textfield mdl-js-textfield" style="flex:1;">
+          <input class="mdl-textfield__input" type="email" name="email" id="new-email" required>
+          <label class="mdl-textfield__label" for="new-email">Email to allow…</label>
+        </div>
+        <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
+                type="submit">
+          Add
+        </button>
+      </form>
+    </div>
+    <div class="table-scroll">
+      <table class="mdl-data-table mdl-js-data-table" style="width:100%;max-width:480px;">
+        <thead><tr><th>Email</th><th></th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _page("Access", body, bridge_name)

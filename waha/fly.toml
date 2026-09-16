@@ -16,7 +16,7 @@ primary_region = "fra"
   # a real deploy failure ("does not support amd64 architecture for linux
   # os") before landing on this tag — the arm-tag QR-pairing bug that note
   # describes is specific to the `arm` tag, not this one.
-  image = "devlikeapro/waha:latest"
+  image = "devlikeapro/waha:dev"
 
 [[mounts]]
   # One volume, not two: a Fly Machine only supports a single volume mount
@@ -27,7 +27,11 @@ primary_region = "fra"
   # WAHA_LOCAL_STORE_BASE_DIR below), it's not hardcoded to /app/.sessions.
   source = "waha_data"
   destination = "/app/data"
-  initial_size = "1gb"
+  # Was 1gb — filled to 100% and started throwing ENOSPC (see
+  # docs/decisions/0016). This value only takes effect at volume-creation
+  # time; the already-created live volume was resized separately via
+  # `fly volumes extend`, not by editing this file.
+  initial_size = "5gb"
 
 [[vm]]
   size = "shared-cpu-2x"
@@ -35,11 +39,36 @@ primary_region = "fra"
   # smallest tier. /dev/shm sizing on Fly Machines isn't the same knob as
   # docker-compose's explicit shm_size: 2gb; watch logs after first deploy
   # for a Chromium shm crash and bump this if it happens.
-  memory = "1gb"
+  memory = "2gb"
 
 [env]
-  WHATSAPP_DEFAULT_ENGINE = "WEBJS"
+  # TEMPORARY DIAGNOSTIC SWAP (2026-09-09): was WEBJS. On this Fly machine
+  # WEBJS's headless Chromium could not reliably load web.whatsapp.com —
+  # every session start/restart hit `TimeoutError: Waiting failed: 30000ms
+  # exceeded` or `Navigating frame was detached`, looping forever and never
+  # producing a stable QR/pairing state. Trying NOWEB (no browser, talks the
+  # WhatsApp Web protocol directly) to see if it's specific to WEBJS/Chromium
+  # on this host, or a network-path problem that would hit NOWEB too.
+  #
+  # Caveat (see docker-compose.yml's WEBJS comment, which this contradicts
+  # for now): NOWEB/GOWS are protocol reimplementations previously avoided
+  # because they hit `companion_reg_refresh`-class upstream WhatsApp
+  # breakage that WEBJS sidesteps by driving the real site. If NOWEB fails
+  # here too, that's likely why — not a new bug. If NOWEB turns out to be
+  # the stable choice, promote this to a real docs/decisions/ record
+  # (superseding that comment) instead of leaving it as a fly.toml note.
+  WHATSAPP_DEFAULT_ENGINE = "NOWEB"
+  # Recommended for NOWEB per WAHA's docs — tracks WhatsApp's current web
+  # version automatically instead of pinning one that goes stale.
+  WAHA_NOWEB_WA_VERSION = "auto-web"
   WAHA_LOCAL_STORE_BASE_DIR = "/app/data/sessions"
   WHATSAPP_FILES_FOLDER = "/app/data/media"
-  WHATSAPP_FILES_LIFETIME = "0"
+  # 7 days, in seconds — was "0" (never expire), which is what actually
+  # filled the volume and caused the ENOSPC outage this bounds. See
+  # docs/decisions/0016 (supersedes the media half of 0007). Kept in sync
+  # with docker-compose.yml's local-dev value.
+  WHATSAPP_FILES_LIFETIME = "604800"
+  WAHA_LOG_FORMAT = "JSON"
+  WAHA_HTTP_LOG_LEVEL = "warn"
+  WAHA_PRINT_QR = "false"
   # WAHA_API_KEY goes through `fly secrets set`, never here.

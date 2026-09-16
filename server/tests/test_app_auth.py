@@ -3,11 +3,13 @@ Unit tests for the authn/authz wiring in app.py.
 
 allowed_family_email and restrict_tag are plain callables (AuthCheck), so
 they're testable directly against a minimal AuthContext without spinning up
-a real HTTP server or OAuth flow.
+a real HTTP server or OAuth flow. allowed_family_email is async (it queries
+state.db — see docs/decisions/0015-email-allowlist-in-db.md) — fastmcp's
+AuthCheck type accepts sync or async callables either way.
 """
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastmcp.exceptions import AuthorizationError
@@ -15,6 +17,7 @@ from fastmcp.server.auth import AuthContext, restrict_tag
 from fastmcp.utilities.components import FastMCPComponent
 
 import botsapp.app as app_module
+import botsapp.state as state
 from botsapp.app import _UNGRANTABLE_SCOPE, OUTBOUND_TAG, allowed_family_email
 
 
@@ -29,39 +32,49 @@ def _ctx(token, tags: set[str] | None = None) -> AuthContext:
 
 
 # ── allowed_family_email ────────────────────────────────────────────────────
+#
+# state.db is set by conftest.py's autouse _patch_state fixture; each test
+# below stubs is_email_allowed directly rather than going through a real
+# DatabaseManager (that's test_db.py's job — see its "email allowlist"
+# section).
 
 
-@patch.dict(os.environ, {"ALLOWED_EMAILS": "anthony@angelfamily.net, mom@example.com"})
-def test_allowed_family_email_accepts_listed_address():
+async def test_allowed_family_email_accepts_listed_address():
+    state.db.is_email_allowed = AsyncMock(return_value=True)
     ctx = _ctx(_FakeToken(claims={"email": "anthony@angelfamily.net"}))
-    assert allowed_family_email(ctx) is True
+    assert await allowed_family_email(ctx) is True
+    state.db.is_email_allowed.assert_awaited_once_with("anthony@angelfamily.net")
 
 
-@patch.dict(os.environ, {"ALLOWED_EMAILS": "anthony@angelfamily.net"})
-def test_allowed_family_email_is_case_insensitive():
+async def test_allowed_family_email_is_case_insensitive():
+    state.db.is_email_allowed = AsyncMock(return_value=True)
     ctx = _ctx(_FakeToken(claims={"email": "Anthony@AngelFamily.NET"}))
-    assert allowed_family_email(ctx) is True
+    assert await allowed_family_email(ctx) is True
+    # The claim is lowercased before ever reaching the DB — is_email_allowed
+    # itself also normalizes (see db.py), but the check shouldn't rely on that.
+    state.db.is_email_allowed.assert_awaited_once_with("anthony@angelfamily.net")
 
 
-@patch.dict(os.environ, {"ALLOWED_EMAILS": "anthony@angelfamily.net"})
-def test_allowed_family_email_rejects_unlisted_address():
+async def test_allowed_family_email_rejects_unlisted_address():
+    state.db.is_email_allowed = AsyncMock(return_value=False)
     ctx = _ctx(_FakeToken(claims={"email": "stranger@example.com"}))
     with pytest.raises(AuthorizationError):
-        allowed_family_email(ctx)
+        await allowed_family_email(ctx)
 
 
-@patch.dict(os.environ, {"ALLOWED_EMAILS": "anthony@angelfamily.net"})
-def test_allowed_family_email_rejects_unauthenticated_caller():
+async def test_allowed_family_email_rejects_unauthenticated_caller():
     ctx = _ctx(token=None)
     with pytest.raises(AuthorizationError):
-        allowed_family_email(ctx)
+        await allowed_family_email(ctx)
+    # No email to check — shouldn't even hit the DB.
+    state.db.is_email_allowed.assert_not_awaited()
 
 
-@patch.dict(os.environ, {"ALLOWED_EMAILS": "anthony@angelfamily.net"})
-def test_allowed_family_email_rejects_token_without_email_claim():
+async def test_allowed_family_email_rejects_token_without_email_claim():
     ctx = _ctx(_FakeToken(claims={}))
     with pytest.raises(AuthorizationError):
-        allowed_family_email(ctx)
+        await allowed_family_email(ctx)
+    state.db.is_email_allowed.assert_not_awaited()
 
 
 # ── outbound-tag restriction ─────────────────────────────────────────────

@@ -49,7 +49,9 @@ primary_region = "fra"
   # actually names it (https://<app-name>.fly.dev).
   MCP_BASE_URL = "https://botsapp.fly.dev"
   # Not secret (it's already exposed via the public OAuth discovery
-  # endpoint) — WAHA_API_KEY, ALLOWED_EMAILS, and (if voice-note
-  # transcription is wanted — see .env.example) OPENAI_API_KEY are the
-  # ones that go through `fly secrets set` instead, never here.
+  # endpoint) — WAHA_API_KEY, and (if voice-note transcription is wanted —
+  # see .env.example) OPENAI_API_KEY are the ones that go through
+  # `fly secrets set` instead, never here. There's no ALLOWED_EMAILS to set
+  # either way — the email allowlist lives in the DB now, managed from the
+  # admin UI's Access tab. See docs/decisions/0015-email-allowlist-in-db.md.
   WORKOS_AUTHKIT_DOMAIN = ""

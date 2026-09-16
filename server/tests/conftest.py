@@ -4,15 +4,15 @@ Shared fixtures for the botsapp test suite.
 
 import os
 
-# botsapp.app builds its AuthKitProvider (and reads ALLOWED_EMAILS) at
-# import time — set harmless dummy values *before* anything below imports
-# botsapp.app (directly, or transitively via botsapp.tools), so
-# collecting the test suite doesn't require a real WorkOS project.
-# setdefault: a real .env already loaded (e.g. running under docker-compose)
-# wins over these.
+# botsapp.app builds its AuthKitProvider at import time — set harmless dummy
+# values *before* anything below imports botsapp.app (directly, or
+# transitively via botsapp.tools), so collecting the test suite doesn't
+# require a real WorkOS project. setdefault: a real .env already loaded
+# (e.g. running under docker-compose) wins over these. No ALLOWED_EMAILS
+# equivalent needed — the email allowlist lives in the DB now (see mock_db
+# below / docs/decisions/0015-email-allowlist-in-db.md), not an env var.
 os.environ.setdefault("WORKOS_AUTHKIT_DOMAIN", "https://test.authkit.app")
 os.environ.setdefault("MCP_BASE_URL", "http://localhost:8000")
-os.environ.setdefault("ALLOWED_EMAILS", "test@example.com")
 
 from unittest.mock import AsyncMock  # noqa: E402
 
@@ -31,6 +31,9 @@ def mock_db() -> AsyncMock:
     # default to "everything allowed" so existing tests don't all need to
     # know about it. Tests that care about the allowlist override this.
     mock.list_allowed_jids = AsyncMock(return_value=_ALLOW_ALL)
+    # Same idea for the email allowlist (see test_app_auth.py) — default to
+    # "allowed" so tests unrelated to auth don't each need to stub this out.
+    mock.is_email_allowed = AsyncMock(return_value=True)
     return mock
 
 
