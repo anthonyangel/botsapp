@@ -725,6 +725,52 @@ async def test_get_media_returns_file_for_video(mock_db: AsyncMock, mock_message
     assert result.to_resource_content().resource.mime_type == "video/mp4"
 
 
+async def test_get_media_returns_file_with_real_filename_for_document(
+    mock_db: AsyncMock, mock_message_store: AsyncMock
+):
+    # A document's mimetype subtype (e.g. PowerPoint's
+    # "vnd.openxmlformats-officedocument.presentationml.presentation") is
+    # not a usable file extension on its own — without WAHA's real filename
+    # threaded through, File would fall back to guessing one from that
+    # subtype and produce an unusable name for anyone trying to download
+    # the attachment. Assert the real name+extension make it into the
+    # embedded resource's URI instead of that fallback.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    pptx_bytes = b"fake-pptx-bytes"
+    mock_message_store.get_media.return_value = {
+        "data": pptx_bytes,
+        "mimetype": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "filename": "Q4 Slides.pptx",
+    }
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, File)
+    assert result.data == pptx_bytes
+    resource = result.to_resource_content().resource
+    assert resource.uri == "file:///Q4%20Slides.pptx"
+
+
+async def test_get_media_falls_back_to_generic_name_without_filename(
+    mock_db: AsyncMock, mock_message_store: AsyncMock
+):
+    # WAHA doesn't always have a filename on file (e.g. some older/synced
+    # media) — must still succeed, just without a meaningful name.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    mock_message_store.get_media.return_value = {
+        "data": b"fake-pdf-bytes",
+        "mimetype": "application/pdf",
+        "filename": None,
+    }
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, File)
+    assert result.to_resource_content().resource.uri == "file:///resource.pdf"
+
+
 async def test_get_media_not_allowed_raises(mock_db: AsyncMock, mock_message_store: AsyncMock):
     mock_message_store.get_message_chat_jid.return_value = "other@g.us"
     mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
