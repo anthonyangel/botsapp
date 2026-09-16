@@ -689,7 +689,7 @@ async def get_chat_metadata(jid: str) -> dict[str, Any]:
 # ── Media ────────────────────────────────────────────────────────────────
 
 
-def _media_content(mimetype: str, data: bytes) -> Image | Audio | File:
+def _media_content(mimetype: str, data: bytes, filename: str | None = None) -> Image | Audio | File:
     """Wrap raw media bytes in the fastmcp content type matching mimetype.
 
     MCP only has first-class content blocks for text/image/audio (see
@@ -699,6 +699,18 @@ def _media_content(mimetype: str, data: bytes) -> Image | Audio | File:
     ``format``; File derives it from a filename it doesn't have here (it'd
     otherwise guess "application/<format>", wrong for e.g. video/mp4), so
     its mime type is set directly instead.
+
+    ``filename`` (WAHA's own name for the file, when it has one) is passed
+    through to File's ``name`` so its embedded-resource URI carries a real
+    name+extension (e.g. "file:///Q4 Slides.pptx") instead of File's own
+    fallback of guessing an extension from the mime subtype — which is
+    flatly wrong for anything but a handful of simple types: a document's
+    mimetype subtype is often the whole
+    "vnd.openxmlformats-officedocument.presentationml.presentation"-style
+    string, not a usable file extension, so without a real filename a
+    client trying to save/download the attachment would get an unusable
+    name. Images/audio don't need this: their format-derived mime type
+    already yields a sane extension via the same fallback.
     """
     clean = (mimetype or "").split(";", 1)[0].strip().lower() or "application/octet-stream"
     top_level, _, subtype = clean.partition("/")
@@ -706,7 +718,7 @@ def _media_content(mimetype: str, data: bytes) -> Image | Audio | File:
         return Image(data=data, format=subtype or "jpeg")
     if top_level == "audio":
         return Audio(data=data, format=subtype or "ogg")
-    file = File(data=data)
+    file = File(data=data, name=filename or None)
     file._mime_type = clean  # noqa: SLF001 — see docstring above
     return file
 
@@ -736,7 +748,10 @@ async def get_media(message_id: str) -> Image | Audio | File | list[Image | Audi
         The media content, typed to match its mimetype (Image for
         images/stickers, Audio for voice notes/audio, File for anything
         else such as video or documents) — or, for audio with a transcript
-        available, a two-item list of [Audio, transcript text].
+        available, a two-item list of [Audio, transcript text]. A File
+        carries WAHA's original filename when it has one, so a document
+        (e.g. a PowerPoint) downloads with a real name and extension
+        rather than a generic one guessed from its mimetype.
     """
     assert state.message_store is not None
     assert state.db is not None
@@ -751,7 +766,7 @@ async def get_media(message_id: str) -> Image | Audio | File | list[Image | Audi
             "Either this message has no attached media, or WAHA no longer "
             "has a copy of it."
         )
-    content = _media_content(media["mimetype"], media["data"])
+    content = _media_content(media["mimetype"], media["data"], media.get("filename"))
     if isinstance(content, Audio):
         transcript = await transcribe_audio(media["data"], media["mimetype"], media.get("filename"))
         if transcript:
