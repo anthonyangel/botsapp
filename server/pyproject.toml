@@ -13,6 +13,7 @@ dependencies = [
     "aiosql>=12.0",
     "starlette>=0.52.0",
     "python-multipart>=0.0.9",
+    "boto3>=1.43.96",
     # Country-flag column on the admin UI's Chats tab: derives an ISO
     # region from a chat's E.164 jid via the same calling-code table
     # libphonenumber uses — no network call, no API key.
