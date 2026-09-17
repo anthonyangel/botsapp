@@ -27,6 +27,7 @@ from botsapp.tools import (
     get_media,
     leave_group,
     list_chats,
+    list_communities,
     list_groups,
     list_messages,
     list_newsletters,
@@ -370,6 +371,70 @@ async def test_list_groups_output_size_bounded_with_many_large_groups(mock_bridg
     # asdict()-based version would have serialized well over 100K chars
     # for this exact shape (2000+50*29 member JIDs).
     assert len(json.dumps(result)) < 10_000
+
+
+_DOCUMENTED_LIST_COMMUNITIES_FIELDS = {"jid", "name", "topic"}
+
+
+async def test_list_communities_returns_only_communities(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group(jid="g1@g.us", name="Community", is_community=True),
+        _group(jid="g2@g.us", name="Regular", is_community=False),
+    ]
+    result = await list_communities()
+    assert [c["jid"] for c in result] == ["g1@g.us"]
+    assert result[0]["name"] == "Community"
+
+
+async def test_list_communities_excludes_chats_not_in_allowlist(
+    mock_bridge: AsyncMock, mock_db: AsyncMock
+):
+    mock_db.list_allowed_jids.return_value = {"g1@g.us"}
+    mock_bridge.list_groups.return_value = [
+        _group(jid="g1@g.us", name="Allowed", is_community=True),
+        _group(jid="g2@g.us", name="Not allowed", is_community=True),
+    ]
+    result = await list_communities()
+    assert [c["jid"] for c in result] == ["g1@g.us"]
+
+
+async def test_list_communities_filters_by_query_and_tags(
+    mock_bridge: AsyncMock, mock_db: AsyncMock
+):
+    mock_bridge.list_groups.return_value = [
+        _group(jid="g1@g.us", name="Yeshurun Community", is_community=True),
+        _group(jid="g2@g.us", name="Other Community", is_community=True),
+    ]
+    mock_db.search_by_tags.return_value = [{"jid": "g1@g.us", "tags": ["shul"], "name": "g1@g.us"}]
+    result = await list_communities(query="yeshurun", tags=["shul"])
+    assert [c["jid"] for c in result] == ["g1@g.us"]
+
+
+async def test_list_communities_error(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.side_effect = RuntimeError("timeout")
+    result = await list_communities()
+    assert "error" in result[0]
+
+
+async def test_list_communities_never_leaks_participant_count_or_invite_link(
+    mock_bridge: AsyncMock,
+):
+    # A community's own participant_count is just its admin(s), not real
+    # membership — actively misleading rather than merely absent, so this
+    # must never appear in the output at all (unlike list_groups, which
+    # documents and returns it for a regular group).
+    mock_bridge.list_groups.return_value = [
+        _group(
+            jid="c1@g.us",
+            name="Community",
+            is_community=True,
+            participant_count=1,
+            participants=["owner@s.whatsapp.net"],
+            invite_link="https://chat.whatsapp.com/SuperSecretInviteCode",
+        )
+    ]
+    result = await list_communities()
+    assert result[0].keys() == _DOCUMENTED_LIST_COMMUNITIES_FIELDS
 
 
 async def test_get_group_info_delegates_to_bridge(mock_bridge: AsyncMock):
