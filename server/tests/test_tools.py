@@ -771,6 +771,102 @@ async def test_get_media_falls_back_to_generic_name_without_filename(
     assert result.to_resource_content().resource.uri == "file:///resource.pdf"
 
 
+async def test_get_media_falls_back_to_real_extension_for_office_doc_without_filename(
+    mock_db: AsyncMock, mock_message_store: AsyncMock
+):
+    # Confirmed live: WAHA sometimes has no filename for an Office
+    # document either. File's own no-filename fallback guesses an
+    # extension from the mime *subtype*, which for OOXML types is the
+    # whole "vnd.openxmlformats-officedocument.presentationml.presentation"
+    # string — not a usable name. Must still resolve a real ".pptx"
+    # extension via mimetypes.guess_extension instead.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    mock_message_store.get_media.return_value = {
+        "data": b"fake-pptx-bytes",
+        "mimetype": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "filename": None,
+    }
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, File)
+    assert result.to_resource_content().resource.uri == "file:///resource.pptx"
+
+
+async def test_get_media_returns_presigned_link_for_document_when_tigris_configured(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    # When object_storage.upload_and_presign succeeds, a document should
+    # come back as a plain-text download link rather than an embedded File
+    # blob — some MCP clients reject the blob outright based on its
+    # mimetype (confirmed live for a PowerPoint attachment), but every
+    # client can handle a text link.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    mock_message_store.get_media.return_value = {
+        "data": b"fake-pptx-bytes",
+        "mimetype": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "filename": "Q4 Slides.pptx",
+    }
+    upload_mock = AsyncMock(return_value="https://fly.storage.tigris.dev/fake-presigned-url")
+    monkeypatch.setattr("botsapp.tools.upload_and_presign", upload_mock)
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, str)
+    assert "Q4 Slides.pptx" in result
+    assert "https://fly.storage.tigris.dev/fake-presigned-url" in result
+    upload_mock.assert_awaited_once_with(
+        b"fake-pptx-bytes",
+        "Q4 Slides.pptx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+
+
+async def test_get_media_returns_presigned_link_for_video_when_tigris_configured(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    # Video hits the same no-dedicated-content-type path as documents.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    mock_message_store.get_media.return_value = {
+        "data": b"fake-mp4-bytes",
+        "mimetype": "video/mp4",
+        "filename": None,
+    }
+    monkeypatch.setattr(
+        "botsapp.tools.upload_and_presign",
+        AsyncMock(return_value="https://fly.storage.tigris.dev/fake-video-url"),
+    )
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, str)
+    assert "https://fly.storage.tigris.dev/fake-video-url" in result
+
+
+async def test_get_media_falls_back_to_file_when_tigris_upload_fails(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    # upload_and_presign is best-effort — a configured-but-failing upload
+    # (bad credentials, network error, ...) must not break get_media.
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    pptx_bytes = b"fake-pptx-bytes"
+    mock_message_store.get_media.return_value = {
+        "data": pptx_bytes,
+        "mimetype": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "filename": "Q4 Slides.pptx",
+    }
+    monkeypatch.setattr("botsapp.tools.upload_and_presign", AsyncMock(return_value=None))
+
+    result = await get_media(message_id="M1")
+
+    assert isinstance(result, File)
+    assert result.data == pptx_bytes
+
+
 async def test_get_media_not_allowed_raises(mock_db: AsyncMock, mock_message_store: AsyncMock):
     mock_message_store.get_message_chat_jid.return_value = "other@g.us"
     mock_db.list_allowed_jids.return_value = {"allowed@g.us"}

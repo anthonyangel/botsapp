@@ -27,6 +27,7 @@ here branches on which bridge is selected.
 """
 
 import logging
+import mimetypes
 from dataclasses import asdict
 from typing import Any
 
@@ -36,6 +37,7 @@ from fastmcp.utilities.types import Audio, File, Image
 import botsapp.state as state
 from botsapp.app import OUTBOUND_TAG, mcp
 from botsapp.message_store import ChatNotAllowedError
+from botsapp.object_storage import upload_and_presign
 from botsapp.transcription import transcribe_audio
 
 logger = logging.getLogger(__name__)
@@ -689,6 +691,28 @@ async def get_chat_metadata(jid: str) -> dict[str, Any]:
 # ── Media ────────────────────────────────────────────────────────────────
 
 
+def _clean_mimetype(mimetype: str) -> str:
+    return (mimetype or "").split(";", 1)[0].strip().lower() or "application/octet-stream"
+
+
+def _resolve_filename(clean_mimetype: str, filename: str | None) -> str | None:
+    """Fill in a usable filename+extension when WAHA doesn't supply one.
+
+    WAHA's own filename is preferred whenever it has one. When it's missing
+    (confirmed live — some documents come back with "filename": None), this
+    guesses a real extension from the mimetype via mimetypes.guess_extension
+    instead of leaving it to File's own fallback, which guesses from the
+    mime *subtype* — flatly wrong for anything but a handful of simple
+    types: a document's subtype is often the whole
+    "vnd.openxmlformats-officedocument.presentationml.presentation"-style
+    string, not a usable file extension.
+    """
+    if filename:
+        return filename
+    extension = mimetypes.guess_extension(clean_mimetype)
+    return f"resource{extension}" if extension else None
+
+
 def _media_content(mimetype: str, data: bytes, filename: str | None = None) -> Image | Audio | File:
     """Wrap raw media bytes in the fastmcp content type matching mimetype.
 
@@ -700,31 +724,26 @@ def _media_content(mimetype: str, data: bytes, filename: str | None = None) -> I
     otherwise guess "application/<format>", wrong for e.g. video/mp4), so
     its mime type is set directly instead.
 
-    ``filename`` (WAHA's own name for the file, when it has one) is passed
-    through to File's ``name`` so its embedded-resource URI carries a real
-    name+extension (e.g. "file:///Q4 Slides.pptx") instead of File's own
-    fallback of guessing an extension from the mime subtype — which is
-    flatly wrong for anything but a handful of simple types: a document's
-    mimetype subtype is often the whole
-    "vnd.openxmlformats-officedocument.presentationml.presentation"-style
-    string, not a usable file extension, so without a real filename a
-    client trying to save/download the attachment would get an unusable
-    name. Images/audio don't need this: their format-derived mime type
-    already yields a sane extension via the same fallback.
+    ``filename`` (see _resolve_filename) is passed through to File's
+    ``name`` so its embedded-resource URI carries a real name+extension
+    (e.g. "file:///Q4 Slides.pptx") instead of File's own subtype-guessing
+    fallback.
     """
-    clean = (mimetype or "").split(";", 1)[0].strip().lower() or "application/octet-stream"
+    clean = _clean_mimetype(mimetype)
     top_level, _, subtype = clean.partition("/")
     if top_level == "image":
         return Image(data=data, format=subtype or "jpeg")
     if top_level == "audio":
         return Audio(data=data, format=subtype or "ogg")
-    file = File(data=data, name=filename or None)
+    file = File(data=data, name=_resolve_filename(clean, filename))
     file._mime_type = clean  # noqa: SLF001 — see docstring above
     return file
 
 
 @mcp.tool(tags={"read", "media"})
-async def get_media(message_id: str) -> Image | Audio | File | list[Image | Audio | File | str]:
+async def get_media(
+    message_id: str,
+) -> Image | Audio | File | str | list[Image | Audio | File | str]:
     """Retrieve a message's media — image, sticker, video, or voice note/audio.
 
     Only returns media for messages belonging to an allowlisted chat: this
@@ -741,17 +760,28 @@ async def get_media(message_id: str) -> Image | Audio | File | list[Image | Audi
     effort — silently omitted if OPENAI_API_KEY isn't configured or the
     request fails) and returns it as a second item alongside the audio.
 
+    Video and documents have no dedicated MCP content type either, and
+    embedding them as a generic resource blob doesn't work everywhere —
+    confirmed live, some MCP clients reject an embedded resource outright
+    when they don't recognize its mimetype (e.g. a PowerPoint attachment).
+    So for those, this instead tries Tigris (see object_storage.py; best
+    effort — silently skipped if not configured or the upload fails) and
+    returns a short-lived presigned download link as plain text instead of
+    the raw blob, which every MCP client can handle. Falls back to the
+    embedded-blob File when Tigris isn't configured.
+
     Args:
         message_id: The message_id field from list_messages or search_messages.
 
     Returns:
-        The media content, typed to match its mimetype (Image for
-        images/stickers, Audio for voice notes/audio, File for anything
-        else such as video or documents) — or, for audio with a transcript
-        available, a two-item list of [Audio, transcript text]. A File
-        carries WAHA's original filename when it has one, so a document
-        (e.g. a PowerPoint) downloads with a real name and extension
-        rather than a generic one guessed from its mimetype.
+        The media content, typed to match its mimetype: Image for
+        images/stickers, Audio for voice notes/audio (paired with a
+        transcript as a two-item list when one's available), a presigned
+        download-link string for video/documents when Tigris is
+        configured, or otherwise a File embedding the raw bytes — carrying
+        WAHA's original filename when it has one, so a document (e.g. a
+        PowerPoint) downloads with a real name and extension rather than a
+        generic one guessed from its mimetype.
     """
     assert state.message_store is not None
     assert state.db is not None
@@ -766,6 +796,19 @@ async def get_media(message_id: str) -> Image | Audio | File | list[Image | Audi
             "Either this message has no attached media, or WAHA no longer "
             "has a copy of it."
         )
+
+    clean_mimetype = _clean_mimetype(media["mimetype"])
+    top_level = clean_mimetype.partition("/")[0]
+    if top_level not in ("image", "audio"):
+        filename = _resolve_filename(clean_mimetype, media.get("filename")) or "resource"
+        link = await upload_and_presign(media["data"], filename, clean_mimetype)
+        if link is not None:
+            size_mb = len(media["data"]) / (1024 * 1024)
+            return (
+                f"{filename} ({size_mb:.1f} MB, {clean_mimetype}) — "
+                f"download link (valid 15 minutes): {link}"
+            )
+
     content = _media_content(media["mimetype"], media["data"], media.get("filename"))
     if isinstance(content, Audio):
         transcript = await transcribe_audio(media["data"], media["mimetype"], media.get("filename"))
