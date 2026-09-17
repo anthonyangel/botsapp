@@ -125,6 +125,7 @@ def _page(title: str, body: str, bridge_name: str = "") -> str:
         <nav class="mdl-navigation">
           <a class="mdl-navigation__link" href="/">Session</a>
           <a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>
+          <a class="mdl-navigation__link" href="/access">Access</a>
         </nav>
       </div>
     </header>
@@ -164,11 +165,41 @@ def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
           </a>
         </div>"""
     elif status.get("logged_in"):
+        name_html = html.escape(status.get("name") or "")
+        jid_html = html.escape(status.get("jid") or "")
+        # Show name/jid only when WAHA actually returned them (a truly live
+        # session); a stale persisted session can appear WORKING but have
+        # no me.id / pushName yet because the phone is unreachable.
+        identity_html = ""
+        if name_html or jid_html:
+            identity_html = f"<p>{name_html}</p><p><code>{jid_html}</code></p>"
+        else:
+            identity_html = (
+                '<p class="tab-note">No account details yet — '
+                "the session may be stale. Use the buttons below to re-pair.</p>"
+            )
         body = f"""
         <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:420px;padding:24px;">
           <p><span class="status-dot connected"></span><strong>Connected</strong></p>
-          <p>{html.escape(status.get("name") or "")}</p>
-          <p><code>{html.escape(status.get("jid") or "")}</code></p>
+          {identity_html}
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
+            <form method="post" action="/session/disconnect">
+              <button class="mdl-button mdl-js-button mdl-button--raised" type="submit"
+                      title="Log out gracefully — session stays in STOPPED state; click Connect
+                             WhatsApp to re-pair">
+                Disconnect
+              </button>
+            </form>
+            <form method="post" action="/session/delete"
+                  onsubmit="return confirm(
+                    'Delete the saved session entirely and force a fresh QR scan?')">
+              <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--accent"
+                      type="submit"
+                      title="Delete all saved auth material and force a fresh QR scan">
+                Force re-pair
+              </button>
+            </form>
+          </div>
         </div>"""
     elif status.get("qr_code"):
         qr = status["qr_code"]
@@ -355,6 +386,7 @@ def _direct_chat_row(row: dict[str, Any]) -> str:
     jid = row["jid"]
     name = row.get("name") or jid
     tags = row.get("tags") or []
+    country_flag = row.get("country_flag") or ""
     # Both attrs feed the client-side script below: data-search backs the
     # search box (name/jid/tags, so filtering also covers tags, not just
     # the chat name), data-name backs the "sort by name" header.
@@ -365,11 +397,15 @@ def _direct_chat_row(row: dict[str, Any]) -> str:
     # an in-place tag edit, since they update this row's tags without a
     # page reload and can't otherwise recover "just the name/jid part" of
     # an already-lowercased, already-joined data-search string.
+    # data-country backs the "sort by country" header — sorting on the
+    # rendered "🇮🇱 +972" text groups by flag first, which is what you'd
+    # expect from a country column.
     base_search_blob = " ".join([name, jid]).lower()
     search_blob = " ".join([base_search_blob, *(t.lower() for t in tags)]).strip()
     tags_json = html.escape(json.dumps([t.lower() for t in tags]), quote=True)
     return f"""
     <tr data-name="{html.escape(name.lower(), quote=True)}"
+        data-country="{html.escape(country_flag, quote=True)}"
         data-search="{html.escape(search_blob, quote=True)}"
         data-base-search="{html.escape(base_search_blob, quote=True)}"
         data-tags="{tags_json}">
@@ -382,18 +418,21 @@ def _direct_chat_row(row: dict[str, Any]) -> str:
           </div>
         </div>
       </td>
+      <td>{html.escape(country_flag)}</td>
       <td>{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
       <td>{_metadata_form(jid, tags)}</td>
     </tr>"""
 
 
 def _group_row(row: dict[str, Any]) -> str:
+    # Communities never reach here — chats_index() splits them out to
+    # their own tab (see _community_row) before building group_rows, so
+    # there's no "is this a community" badge to render.
     jid = row["jid"]
     name = row.get("name") or jid
     tags = row.get("tags") or []
     topic = row.get("topic") or ""
     participant_count = row.get("participant_count", 0)
-    community_badge = '<span class="badge">Community</span>' if row.get("is_community") else ""
     topic_text = html.escape(topic, quote=True) if topic else ""
     topic_div = (
         f'<div class="row-topic" title="{topic_text}">{topic_text}</div>' if topic_text else ""
@@ -416,13 +455,80 @@ def _group_row(row: dict[str, Any]) -> str:
         <div class="row-name">
           {_avatar(row.get("avatar_url"), name)}
           <div class="meta">
-            <span>{html.escape(name)}{community_badge}</span>
+            <span>{html.escape(name)}</span>
             <code>{html.escape(jid)}</code>
             {topic_div}
           </div>
         </div>
       </td>
       <td>{participant_count} members</td>
+      <td>{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
+      <td>{_metadata_form(jid, tags)}</td>
+    </tr>"""
+
+
+def _community_row(row: dict[str, Any]) -> str:
+    # No members column, deliberately: a WhatsApp Community's own
+    # "participants" list is just its admin(s)/owner, not real membership
+    # (confirmed live — every community here had a single-digit count,
+    # matching WhatsApp's own "size" field exactly) — showing it next to
+    # "Community" reads as a bug, not a fact about the community. Actual
+    # members live in the sub-groups underneath, which already appear as
+    # their own ordinary rows on the Groups tab.
+    jid = row["jid"]
+    name = row.get("name") or jid
+    tags = row.get("tags") or []
+    topic = row.get("topic") or ""
+    topic_text = html.escape(topic, quote=True) if topic else ""
+    topic_div = (
+        f'<div class="row-topic" title="{topic_text}">{topic_text}</div>' if topic_text else ""
+    )
+    base_search_blob = " ".join([name, jid, topic]).lower()
+    search_blob = " ".join([base_search_blob, *(t.lower() for t in tags)]).strip()
+    tags_json = html.escape(json.dumps([t.lower() for t in tags]), quote=True)
+    return f"""
+    <tr data-name="{html.escape(name.lower(), quote=True)}"
+        data-search="{html.escape(search_blob, quote=True)}"
+        data-base-search="{html.escape(base_search_blob, quote=True)}"
+        data-tags="{tags_json}">
+      <td>
+        <div class="row-name">
+          {_avatar(row.get("avatar_url"), name)}
+          <div class="meta">
+            <span>{html.escape(name)}</span>
+            <code>{html.escape(jid)}</code>
+            {topic_div}
+          </div>
+        </div>
+      </td>
+      <td>{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
+      <td>{_metadata_form(jid, tags)}</td>
+    </tr>"""
+
+
+def _newsletter_row(row: dict[str, Any]) -> str:
+    # Same shape as the original (pre-country-column) _direct_chat_row — a
+    # channel's jid isn't a phone number, so there's no country to show.
+    jid = row["jid"]
+    name = row.get("name") or jid
+    tags = row.get("tags") or []
+    base_search_blob = " ".join([name, jid]).lower()
+    search_blob = " ".join([base_search_blob, *(t.lower() for t in tags)]).strip()
+    tags_json = html.escape(json.dumps([t.lower() for t in tags]), quote=True)
+    return f"""
+    <tr data-name="{html.escape(name.lower(), quote=True)}"
+        data-search="{html.escape(search_blob, quote=True)}"
+        data-base-search="{html.escape(base_search_blob, quote=True)}"
+        data-tags="{tags_json}">
+      <td>
+        <div class="row-name">
+          {_avatar(row.get("avatar_url"), name)}
+          <div class="meta">
+            <span>{html.escape(name)}</span>
+            <code>{html.escape(jid)}</code>
+          </div>
+        </div>
+      </td>
       <td>{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
       <td>{_metadata_form(jid, tags)}</td>
     </tr>"""
@@ -472,17 +578,49 @@ def _empty_row(colspan: int, message: str) -> str:
     )
 
 
+def _groups_loaded_note(loaded: int, total: int) -> str:
+    """ "42/159 groups loaded" — every real group jid ends "@g.us" (see
+    admin/app.py's _classify), so the account's chat list is an
+    independent, authoritative count of how many groups it's actually in,
+    separate from whatever the bridge's dedicated groups endpoint returns.
+    The two can disagree in a way worth surfacing rather than silently
+    under-showing: WAHA's NOWEB engine (confirmed live) only returns full
+    metadata for groups its own store has synced, which can lag well
+    behind the chat list after a fresh pairing. Only rendered when there's
+    an actual gap — once loaded catches up to total there's nothing to say.
+    """
+    if total == 0 or loaded >= total:
+        return ""
+    return f"""
+    <p class="tab-note">
+      Loaded {loaded}/{total} groups. The rest have chat history but the
+      bridge hasn't synced their metadata yet — this is a known gap in
+      WAHA's NOWEB engine after a fresh pairing, not a botsapp bug. They
+      should appear here as they get activity, or after a session restart.
+    </p>"""
+
+
 def browse_page(
     direct_rows: list[dict[str, Any]],
     group_rows: list[dict[str, Any]],
+    community_rows: list[dict[str, Any]],
+    newsletter_rows: list[dict[str, Any]],
     status_row: dict[str, Any] | None,
     bridge_name: str = "",
+    group_count_loaded: int = 0,
+    group_count_total: int = 0,
 ) -> str:
     direct_trs = "".join(_direct_chat_row(r) for r in direct_rows) or _empty_row(
-        3, "No direct chats yet — give WhatsApp a moment to sync after logging in."
+        4, "No direct chats yet — give WhatsApp a moment to sync after logging in."
     )
     group_trs = "".join(_group_row(r) for r in group_rows) or _empty_row(
         4, "No groups found — the connected account isn't in any groups yet."
+    )
+    community_trs = "".join(_community_row(r) for r in community_rows) or _empty_row(
+        3, "No communities found — the connected account isn't in any yet."
+    )
+    newsletter_trs = "".join(_newsletter_row(r) for r in newsletter_rows) or _empty_row(
+        3, "No newsletter/channel subscriptions found."
     )
 
     # Some bridges (WAHA, confirmed live) never surface a status@broadcast
@@ -514,6 +652,8 @@ def browse_page(
       <div class="mdl-tabs__tab-bar">
         <a href="#direct-panel" class="mdl-tabs__tab is-active">Chats</a>
         <a href="#groups-panel" class="mdl-tabs__tab">Groups</a>
+        <a href="#community-panel" class="mdl-tabs__tab">Communities</a>
+        <a href="#newsletter-panel" class="mdl-tabs__tab">Newsletters</a>
         {status_tab}
       </div>
 
@@ -531,6 +671,8 @@ def browse_page(
           <thead><tr>
             <th data-sort-key="name" data-sort-type="text"
                 onclick="sortTable(this, 'direct-table')">Chat</th>
+            <th data-sort-key="country" data-sort-type="text"
+                onclick="sortTable(this, 'direct-table')">Country</th>
             <th>Allowlist</th>
             <th>Tags</th>
           </tr></thead>
@@ -540,6 +682,7 @@ def browse_page(
       </div>
 
       <div class="mdl-tabs__panel" id="groups-panel">
+        {_groups_loaded_note(group_count_loaded, group_count_total)}
         <div class="table-toolbar mdl-textfield mdl-js-textfield">
           <input class="mdl-textfield__input" type="search" id="groups-search"
                  oninput="applyTableFilter('groups-search', 'groups-table')">
@@ -558,6 +701,56 @@ def browse_page(
             <th>Allowlist</th><th>Tags</th>
           </tr></thead>
           <tbody>{group_trs}</tbody>
+        </table>
+        </div>
+      </div>
+
+      <div class="mdl-tabs__panel" id="community-panel">
+        <p class="tab-note">
+          A WhatsApp Community groups several sub-groups under one umbrella —
+          those sub-groups already appear on the Groups tab in their own
+          right. No member count here: a community's own participant list is
+          just its admin(s), not real membership.
+        </p>
+        <div class="table-toolbar mdl-textfield mdl-js-textfield">
+          <input class="mdl-textfield__input" type="search" id="community-search"
+                 oninput="applyTableFilter('community-search', 'community-table')">
+          <label class="mdl-textfield__label" for="community-search">
+            Search communities (name, topic, tags)…
+          </label>
+        </div>
+        {_filter_chip_bar(_distinct_tags(community_rows), "community-table", "community-search")}
+        <div class="table-scroll">
+        <table id="community-table" class="mdl-data-table mdl-js-data-table" style="width:100%;">
+          <thead><tr>
+            <th data-sort-key="name" data-sort-type="text"
+                onclick="sortTable(this, 'community-table')">Community</th>
+            <th>Allowlist</th>
+            <th>Tags</th>
+          </tr></thead>
+          <tbody>{community_trs}</tbody>
+        </table>
+        </div>
+      </div>
+
+      <div class="mdl-tabs__panel" id="newsletter-panel">
+        <div class="table-toolbar mdl-textfield mdl-js-textfield">
+          <input class="mdl-textfield__input" type="search" id="newsletter-search"
+                 oninput="applyTableFilter('newsletter-search', 'newsletter-table')">
+          <label class="mdl-textfield__label" for="newsletter-search">
+            Search newsletters (name, tags)…
+          </label>
+        </div>
+        {_filter_chip_bar(_distinct_tags(newsletter_rows), "newsletter-table", "newsletter-search")}
+        <div class="table-scroll">
+        <table id="newsletter-table" class="mdl-data-table mdl-js-data-table" style="width:100%;">
+          <thead><tr>
+            <th data-sort-key="name" data-sort-type="text"
+                onclick="sortTable(this, 'newsletter-table')">Newsletter</th>
+            <th>Allowlist</th>
+            <th>Tags</th>
+          </tr></thead>
+          <tbody>{newsletter_trs}</tbody>
         </table>
         </div>
       </div>
@@ -770,3 +963,58 @@ def browse_page(
     </script>
     """
     return _page("Chats & Groups", body, bridge_name)
+
+
+def _allowed_email_row(email: str) -> str:
+    email_attr = html.escape(email, quote=True)
+    return f"""
+    <tr>
+      <td>{html.escape(email)}</td>
+      <td>
+        <form method="post" action="/access/{email_attr}/remove"
+              onsubmit="return confirm('Remove {email_attr} from the allowlist?');">
+          <button class="mdl-button mdl-js-button mdl-button--icon" type="submit" title="Remove">
+            <i class="material-icons">delete</i>
+          </button>
+        </form>
+      </td>
+    </tr>"""
+
+
+def access_page(emails: list[str], bridge_name: str = "") -> str:
+    """Who may authenticate to the MCP server at all — see
+    docs/decisions/0015-email-allowlist-in-db.md. Distinct from the chat
+    allowlist on /chats, which gates what an already-authenticated caller
+    can see, not who can log in."""
+    rows = (
+        "".join(_allowed_email_row(e) for e in emails)
+        if emails
+        else '<tr><td colspan="2" class="empty-state">No emails allowed yet — '
+        "nobody can use the MCP server until you add one.</td></tr>"
+    )
+    body = f"""
+    <p class="tab-note">
+      Only these emails may authenticate to the MCP server — this is who can
+      log in at all, separate from which chats a logged-in caller can see
+      (that's the Chats &amp; Groups tab). An AuthKit login from an email not
+      listed here is rejected after sign-in.
+    </p>
+    <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:480px;padding:24px;">
+      <form method="post" action="/access/add" style="display:flex;gap:12px;align-items:flex-end;">
+        <div class="mdl-textfield mdl-js-textfield" style="flex:1;">
+          <input class="mdl-textfield__input" type="email" name="email" id="new-email" required>
+          <label class="mdl-textfield__label" for="new-email">Email to allow…</label>
+        </div>
+        <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
+                type="submit">
+          Add
+        </button>
+      </form>
+    </div>
+    <div class="table-scroll">
+      <table class="mdl-data-table mdl-js-data-table" style="width:100%;max-width:480px;">
+        <thead><tr><th>Email</th><th></th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _page("Access", body, bridge_name)

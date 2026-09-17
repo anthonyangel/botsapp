@@ -240,7 +240,8 @@ async def list_groups(
         min_participants: Only include groups with at least this many members (0 = no minimum).
         max_participants: Only include groups with at most this many members (0 = no maximum).
         exclude_communities: Exclude community parent groups whose participant counts
-            are unreliable (default true). Set false to include them.
+            are unreliable (default true). Set false to include them, or use the
+            dedicated list_communities tool instead.
 
     Returns:
         Filtered list with fields: jid, name, topic, participant_count,
@@ -284,6 +285,56 @@ async def list_groups(
         return results
     except Exception as exc:
         logger.error("list_groups failed: %s", exc)
+        return [{"error": str(exc)}]
+
+
+@mcp.tool(tags={"read", "group"})
+async def list_communities(query: str = "", tags: list[str] | None = None) -> list[dict[str, Any]]:
+    """List WhatsApp Communities the account belongs to.
+
+    Only communities allowed via the admin UI are ever returned. No
+    participant_count here (unlike list_groups/get_group_info) — a
+    Community's own participant list is just its admin(s), not real
+    membership, so the field would be actively misleading rather than
+    merely absent. Community membership lives in its sub-groups instead:
+    list_groups (default exclude_communities=True) already excludes the
+    community parent rows this tool returns and gives you those sub-groups
+    instead, each carrying linked_parent_jid back to the community jid
+    returned here.
+
+    Args:
+        query: Case-insensitive substring to match against community names (empty = all).
+        tags: Optional list of tags to search for (matches if community has ANY of
+            these, case-insensitive).
+
+    Returns:
+        Filtered list with fields: jid, name, topic.
+    """
+    try:
+        assert state.bridge is not None
+        assert state.db is not None
+        allowed = await state.db.list_allowed_jids()
+        groups = await state.bridge.list_groups()
+
+        tag_matched_jids: set[str] | None = None
+        if tags:
+            tag_matched_jids = {r["jid"] for r in await state.db.search_by_tags(tags=tags)}
+
+        query_lower = query.lower()
+        results = []
+        for g in groups:
+            if not g.is_community:
+                continue
+            if g.jid not in allowed:
+                continue
+            if tag_matched_jids is not None and g.jid not in tag_matched_jids:
+                continue
+            if query_lower and query_lower not in g.name.lower():
+                continue
+            results.append({"jid": g.jid, "name": g.name, "topic": g.topic})
+        return results
+    except Exception as exc:
+        logger.error("list_communities failed: %s", exc)
         return [{"error": str(exc)}]
 
 

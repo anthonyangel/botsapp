@@ -1,4 +1,4 @@
-# 0015 — Video/documents leave get_media() as a Tigris presigned link, not an embedded blob
+# 0017 — Video/documents leave get_media() as a Tigris presigned link, not an embedded blob
 
 **Status:** Decided (2026-09).
 

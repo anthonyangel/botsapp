@@ -63,3 +63,31 @@ SELECT jid FROM chat_metadata WHERE is_allowed = 1;
 SELECT jid, tags, is_allowed, updated_at
 FROM   chat_metadata
 WHERE  is_allowed = 1;
+
+-- name: create_allowed_emails_table#
+-- The email allowlist that gates whether an authenticated AuthKit caller
+-- may use the MCP server at all (app.py's allowed_family_email) — see
+-- docs/decisions/0015-email-allowlist-in-db.md for why this moved off the
+-- ALLOWED_EMAILS env var. Storing here rather than a new file/service
+-- keeps it in the one place mcp-server and admin-ui already share.
+CREATE TABLE IF NOT EXISTS allowed_emails (
+    email      TEXT PRIMARY KEY,
+    added_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- name: add_allowed_email!
+-- Idempotent — adding an already-present email is a no-op, not an error.
+INSERT INTO allowed_emails (email)
+VALUES (:email)
+ON CONFLICT (email) DO NOTHING;
+
+-- name: remove_allowed_email!
+DELETE FROM allowed_emails WHERE email = :email;
+
+-- name: list_allowed_emails
+SELECT email, added_at FROM allowed_emails ORDER BY added_at;
+
+-- name: get_allowed_email^
+-- Single-row lookup for the auth check itself — no need to pull every row
+-- for a per-request membership test.
+SELECT email FROM allowed_emails WHERE email = :email;

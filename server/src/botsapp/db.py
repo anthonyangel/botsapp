@@ -58,8 +58,9 @@ class DatabaseManager:
     # ── Chat metadata ─────────────────────────────────────────────────────
 
     async def ensure_schema(self) -> None:
-        """Create the table if it doesn't exist yet. Called once at startup."""
+        """Create the tables if they don't exist yet. Called once at startup."""
         await queries.create_chat_metadata_table(self.connection)
+        await queries.create_allowed_emails_table(self.connection)
         await self.connection.commit()
 
     @staticmethod
@@ -111,3 +112,28 @@ class DatabaseManager:
     async def set_chat_allowed(self, jid: str, is_allowed: bool) -> None:
         await queries.set_chat_allowed(self.connection, jid=jid, is_allowed=is_allowed)
         await self.connection.commit()
+
+    # ── Email allowlist ──────────────────────────────────────────────────
+    # Who's allowed to authenticate to the MCP server at all — app.py's
+    # allowed_family_email checks this per request. Distinct from the chat
+    # allowlist above (which gates what an already-authenticated caller can
+    # see). See docs/decisions/0015-email-allowlist-in-db.md.
+
+    @staticmethod
+    def _normalize_email(email: str) -> str:
+        return email.strip().lower()
+
+    async def list_allowed_emails(self) -> list[str]:
+        return [r["email"] async for r in queries.list_allowed_emails(self.connection)]
+
+    async def add_allowed_email(self, email: str) -> None:
+        await queries.add_allowed_email(self.connection, email=self._normalize_email(email))
+        await self.connection.commit()
+
+    async def remove_allowed_email(self, email: str) -> None:
+        await queries.remove_allowed_email(self.connection, email=self._normalize_email(email))
+        await self.connection.commit()
+
+    async def is_email_allowed(self, email: str) -> bool:
+        row = await queries.get_allowed_email(self.connection, email=self._normalize_email(email))
+        return row is not None

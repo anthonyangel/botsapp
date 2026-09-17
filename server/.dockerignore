@@ -1,0 +1,21 @@
+# Build context only — Dockerfile COPYs specific paths (pyproject.toml,
+# uv.lock, src/, start.sh), so none of this ever lands in the image. This
+# just keeps it out of what gets sent to the builder (Fly's remote builder
+# included) on every build.
+
+.venv/
+.git/
+.pytest_cache/
+.ruff_cache/
+.ty_cache/
+__pycache__/
+*.pyc
+
+# Local-only dev artifacts, never meant to ship
+.env
+.env.*
+data/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store

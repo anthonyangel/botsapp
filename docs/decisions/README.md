@@ -16,7 +16,9 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0012 — `AuthKitProvider` advertises a trailing-slash issuer; blocks every real login](0012-authkitprovider-issuer-trailing-slash-bug.md) *(open bug, not fixed by 0011)*
 - [0013 — `mcp-server`/`admin-ui` deploy as one Fly Machine, two processes; `waha` stays separate](0013-single-fly-app-shared-volume.md) *(amends the app count in 0010)*
 - [0014 — Transcribe voice notes via OpenAI's transcription API, not a local model](0014-openai-whisper-api-for-voice-transcription.md)
-- [0015 — Video/documents leave get_media() as a Tigris presigned link, not an embedded blob](0015-tigris-presigned-links-for-media.md)
+- [0015 — Email allowlist moves from `ALLOWED_EMAILS` env var into the shared DB](0015-email-allowlist-in-db.md)
+- [0016 — Bound WAHA media lifetime to 7 days; grow the deployed volume to 5GB](0016-bound-media-lifetime-and-grow-waha-volume.md) *(supersedes the media-persistence part of 0007)*
+- [0017 — Video/documents leave get_media() as a Tigris presigned link, not an embedded blob](0017-tigris-presigned-links-for-media.md)
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 

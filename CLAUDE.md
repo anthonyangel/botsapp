@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0015.
+been kept in date order, current through 0017.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -48,7 +48,9 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   server-side via `restrict_tag` (a scope no real auth token will ever carry)
   — this server is read-only by construction, not by convention. See
   `server/CLAUDE.md` and [0001](docs/decisions/0001-keep-custom-fastmcp-server.md)/[0003](docs/decisions/0003-google-oauth-authn-authz.md).
-- Auth is WorkOS AuthKit + an `ALLOWED_EMAILS` allowlist, no Google/Cloudflare
+- Auth is WorkOS AuthKit + an email allowlist stored in the shared SQLite DB
+  and managed from the admin UI's Access tab (not an env var — see
+  [0015](docs/decisions/0015-email-allowlist-in-db.md)), no Google/Cloudflare
   in the stack — see [0005](docs/decisions/0005-authkit-oauth-provider.md), [0010](docs/decisions/0010-drop-cloudflare-two-provider-deploy.md), [0011](docs/decisions/0011-jwt-template-drops-workostokenverifier.md), [0012](docs/decisions/0012-authkitprovider-issuer-trailing-slash-bug.md) (open bug).
 - Deploy target is Fly.io, plain `fly launch`/`fly deploy` against `server/Dockerfile`
   — no `fly mcp *` tooling, no multi-tenant blueprint, see [0002](docs/decisions/0002-flyio-hosting-mechanics.md).

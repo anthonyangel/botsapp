@@ -50,9 +50,11 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   a new tool that sends/edits/deletes/manages groups: tag it `"outbound"` or
   it will actually be callable.
 - `app.py` — FastMCP instance, lifespan (constructs bridge + `DatabaseManager`
-  into `state`), `AuthKitProvider` wiring, the `ALLOWED_EMAILS` gate
-  (`allowed_family_email`), `LOCAL_DEV_DISABLE_AUTH` escape hatch (dev only —
-  does *not* relax the outbound-tag block).
+  into `state`), `AuthKitProvider` wiring, the email-allowlist gate
+  (`allowed_family_email` — DB-backed via `state.db.is_email_allowed`, not an
+  env var, see [0015](../docs/decisions/0015-email-allowlist-in-db.md)),
+  `LOCAL_DEV_DISABLE_AUTH` escape hatch (dev only — does *not* relax the
+  outbound-tag block).
 - `state.py` — module-level globals (`db`, `bridge`, `message_store`, `mcp`)
   set up in `app.py`'s lifespan; tools read through this rather than a
   request-scoped context.
@@ -63,11 +65,12 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
 ## Testing
 
 - `pytest`, `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` needed).
-- `conftest.py` sets dummy `WORKOS_AUTHKIT_DOMAIN`/`MCP_BASE_URL`/`ALLOWED_EMAILS`
-  via `os.environ.setdefault` *before* importing `botsapp.app` — that module
+- `conftest.py` sets dummy `WORKOS_AUTHKIT_DOMAIN`/`MCP_BASE_URL` via
+  `os.environ.setdefault` *before* importing `botsapp.app` — that module
   builds its `AuthKitProvider` at import time, so collection would otherwise
   need a real WorkOS project. A real `.env` (e.g. under docker-compose) wins
-  over these.
+  over these. No `ALLOWED_EMAILS` equivalent needed here anymore — the email
+  allowlist lives in the DB (`mock_db`/the real `db` fixture), not an env var.
 - `mock_db`/`mock_message_store` fixtures are `AsyncMock(spec=...)` against
   the real classes/Protocols — keeps mocks honest against signature drift.
 - `test_db.py` runs against a real temp-file SQLite database via `aiosqlite`
