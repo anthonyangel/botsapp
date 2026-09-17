@@ -34,12 +34,13 @@ primary_region = "fra"
   initial_size = "5gb"
 
 [[vm]]
-  size = "shared-cpu-2x"
-  # WEBJS drives real headless Chromium — give it real memory, not the
-  # smallest tier. /dev/shm sizing on Fly Machines isn't the same knob as
-  # docker-compose's explicit shm_size: 2gb; watch logs after first deploy
-  # for a Chromium shm crash and bump this if it happens.
-  memory = "2gb"
+  # Was shared-cpu-2x/2gb, sized for WEBJS's headless Chromium. Downsized
+  # 2026-09-17 while the engine is NOWEB (no browser — see WHATSAPP_DEFAULT_ENGINE
+  # below): live usage on the 2gb machine was ~460MB idle. If WEBJS ever comes
+  # back, size this up again first — NOWEB's usage doesn't need to hold once
+  # Chromium is back in the picture.
+  size = "shared-cpu-1x"
+  memory = "1gb"
 
 [env]
   # TEMPORARY DIAGNOSTIC SWAP (2026-09-09): was WEBJS. On this Fly machine
