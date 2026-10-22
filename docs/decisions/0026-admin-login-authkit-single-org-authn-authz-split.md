@@ -51,7 +51,7 @@ What WorkOS can express was checked against its own docs ([FGA](https://workos.c
 | Keep authorization entirely in the app DB; AuthKit only authenticates | Works, and is what exists today. Rejected as the *whole* answer because admin/member and invitations are naturally WorkOS features (invitation emails, role in the token), and the admin page can drive them by API. Grants and chat visibility stay here for the reasons above. |
 | One WorkOS organization per WhatsApp account | A session is scoped to one org, so a user with two accounts would need org switching; conflicts with `list_accounts` and the `account` argument. |
 | WorkOS FGA for per-account grants | Every check is an API call, adds a dependency to the hot path, and buys nothing at this scale. |
-| Per-account permissions or roles encoded in the token | Unclear whether a membership can hold several roles; and per-resource state in a token reintroduces revocation lag. |
+| Per-account permissions or roles encoded in the token | A membership *can* hold several roles (the `workos` SDK's `update_organization_membership` takes a single role or a list), so it is possible, but per-resource state in a token reintroduces revocation lag and tokens can't be revoked instantly; grants stay in the DB. |
 | Tailscale (or another private overlay) identity instead of AuthKit | A second identity system for one extra user; the owner already chose AuthKit. |
 
 ## Consequences

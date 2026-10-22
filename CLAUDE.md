@@ -53,7 +53,9 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   one WorkOS org, role in WorkOS, grants and chat visibility in the DB). Its
   Session and Chats pages act on the account selected in the header (a validated
   cookie); the Accounts and Users pages manage accounts, sharing and people.
-  Needs `BOTSAPP_ADMIN_EMAIL`.
+  Needs `BOTSAPP_ADMIN_EMAIL`. Open follow-ups (live WAHA/WorkOS verification,
+  per-account WAHA keys, tool visibility from key scopes, cleanup) are GitHub
+  issues, summarised under "Where things stand" in 0025.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked
   server-side via `restrict_tag` (a scope no real auth token will ever carry)
   — this server is read-only by construction, not by convention. See

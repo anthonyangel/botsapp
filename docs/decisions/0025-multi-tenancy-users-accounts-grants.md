@@ -1,6 +1,12 @@
 # 0025 — Multi-tenancy: users, accounts, grants, per-viewer chat access
 
-**Status:** Decided (2026-10); phases 1–3 implemented (schema, bridge registry, scoped MCP enforcement), phases 4–5 planned below.
+**Status:** Decided (2026-10). Phases 1–4 are implemented on PR #45 (schema, bridge registry, scoped MCP enforcement, and the admin login and pages decided in [0026](0026-admin-login-authkit-single-org-authn-authz-split.md)); phase 5 (onboarding the second user) waits on the live checks below.
+
+**Where things stand / what's left** (ideas and follow-ups live in GitHub issues, not in this file):
+- Live WAHA probe: multi-session, session keys, key updates, scope table — #47.
+- Per-account WAHA session keys, encrypted in the DB — #52; showing MCP tools only when the key's scopes allow them — #54.
+- WorkOS login and Users page exercised against a real environment — see "Not verified" in 0026.
+- Retire the legacy tables and single-tenant code — #53. Jinja2 for the admin templates — #55.
 
 ## Context
 
@@ -45,12 +51,12 @@ grow per NOWEB session, so size the Fly machine before adding one.
 - **Bootstrap:** `BOTSAPP_ADMIN_EMAIL` makes that email an admin, creates the
   `default` account for it, and copies legacy `chat_metadata` into its
   `chat_access`. Idempotent, run by both processes at start.
-- **Admin surfaces (planned, phase 4):** two, replacing the single login-less UI.
+- **Admin surfaces (phase 4, implemented):** two, replacing the single login-less UI.
   1. *Global admin* (`is_admin` only): users, accounts, grants, all sessions.
   2. *Self-service* (any user, scoped to their own accounts): pair a session
      (QR), edit tags, choose which chats are visible, and grant/revoke their own
      account to others.
-- **MCP (planned, phase 3):** the token's email resolves to the caller's
+- **MCP (phase 3, implemented):** the token's email resolves to the caller's
   accounts; new `list_accounts` tool; tools take an `account` argument, implicit
   when the caller has exactly one. A `Scope(account, viewer)` replaces the global
   allowed set in `AllowlistedMessageStore`. The `outbound`/`restrict_tag` block is
@@ -88,8 +94,8 @@ grow per NOWEB session, so size the Fly machine before adding one.
    account. `chat_metadata` is no longer read or written (left in place, as with
    `allowed_emails`). Tigris keys already carry a random UUID and a 15-minute
    lifetime, so no per-account prefix was added.
-4. Admin auth decision record, then the two admin surfaces.
-5. Onboard the second user.
+4. Admin auth decision record, then the two admin surfaces — **done** (0026; login and pages built against stubbed WorkOS/WAHA, not yet verified live).
+5. Onboard the second user — **pending** the live checks (#47, a real WorkOS login) and #52.
 
 ## Consequences
 
@@ -97,7 +103,7 @@ grow per NOWEB session, so size the Fly machine before adding one.
   (Fly: `[env]` or `fly secrets`) before this ships, or nothing is visible and the
   admin UI's chat edits are disabled. First start copies the old allowlist/tags
   into that user's `chat_access`; edits after that are not mirrored back.
-- The admin UI still has no login and operates as the first admin until phase 4.
+- The admin UI has a login (0026). Until it has been verified against a live WorkOS, the private setup keeps `ADMIN_DISABLE_AUTH`, under which it acts as the first admin.
 - Removing a user who owns an account is refused; transfer/delete the account first.
 - Same-jid chats across accounts are independent rows (keyed by account).
 - Operating the admin UI as the sole admin means the admin can see a paired
