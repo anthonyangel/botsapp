@@ -58,7 +58,7 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   — this server is read-only by construction, not by convention. See
   `server/CLAUDE.md` and [0001](docs/decisions/0001-keep-custom-fastmcp-server.md)/[0003](docs/decisions/0003-google-oauth-authn-authz.md).
 - Auth is WorkOS AuthKit + an email allowlist stored in the shared SQLite DB
-  and managed from the admin UI's Access tab (not an env var — see
+  and managed from the admin UI's Users page (not an env var — see
   [0015](docs/decisions/0015-email-allowlist-in-db.md)), no Google/Cloudflare
   in the stack — see [0005](docs/decisions/0005-authkit-oauth-provider.md), [0010](docs/decisions/0010-drop-cloudflare-two-provider-deploy.md), [0011](docs/decisions/0011-jwt-template-drops-workostokenverifier.md), [0012](docs/decisions/0012-authkitprovider-issuer-trailing-slash-bug.md) (open bug).
 - Deploy target is Fly.io, plain `fly launch`/`fly deploy` against `server/Dockerfile`

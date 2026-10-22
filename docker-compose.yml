@@ -65,7 +65,7 @@ services:
       WORKOS_AUTHKIT_DOMAIN: ${WORKOS_AUTHKIT_DOMAIN}
       MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:8000}
       # No ALLOWED_EMAILS here — the email allowlist lives in the DB, set
-      # via the admin UI's Access tab. See
+      # via the admin UI's Users page. See
       # docs/decisions/0015-email-allowlist-in-db.md.
       LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
       # Optional — voice-note transcription only, see .env.example.

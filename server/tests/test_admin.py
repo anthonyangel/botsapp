@@ -65,9 +65,6 @@ def client(monkeypatch):
         chat_db.get_chat_metadata.return_value = None
         monkeypatch.setattr(admin_app, "_chat_db", lambda _request: chat_db)
         c.chat_db = chat_db
-        state.db.list_allowed_emails = AsyncMock(return_value=[])
-        state.db.add_allowed_email = AsyncMock()
-        state.db.remove_allowed_email = AsyncMock()
         # Module-level, populated fresh by each /chats GET (see its own
         # docstring) — reset between tests so one test's community jid
         # can't leak into the next's redirect-tab lookup.
@@ -368,38 +365,3 @@ def test_save_metadata_parses_comma_separated_tags(client):
 def test_save_metadata_empty_tags(client):
     client.post("/chats/g1@g.us/metadata", data={"tags": ""}, follow_redirects=False)
     client.chat_db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])
-
-
-# ── /access — email allowlist (docs/decisions/0015-email-allowlist-in-db.md) ─
-
-
-def test_access_page_lists_allowed_emails(client):
-    state.db.list_allowed_emails.return_value = ["anthony@angelfamily.net"]
-    r = client.get("/access")
-    assert r.status_code == 200
-    assert "anthony@angelfamily.net" in r.text
-
-
-def test_access_page_shows_empty_state(client):
-    r = client.get("/access")
-    assert r.status_code == 200
-    assert "No emails allowed yet" in r.text
-
-
-def test_add_allowed_email(client):
-    r = client.post("/access/add", data={"email": "mom@example.com"}, follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/access"
-    state.db.add_allowed_email.assert_awaited_once_with("mom@example.com")
-
-
-def test_add_allowed_email_blank_is_a_noop(client):
-    client.post("/access/add", data={"email": "  "}, follow_redirects=False)
-    state.db.add_allowed_email.assert_not_awaited()
-
-
-def test_remove_allowed_email(client):
-    r = client.post("/access/mom@example.com/remove", follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/access"
-    state.db.remove_allowed_email.assert_awaited_once_with("mom@example.com")

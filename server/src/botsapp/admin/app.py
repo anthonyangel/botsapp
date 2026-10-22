@@ -15,7 +15,6 @@ ambiguous which one you're looking at.
 """
 
 import asyncio
-import html
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -32,7 +31,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Route
 
 import botsapp.state as state
-from botsapp.admin import auth, templates
+from botsapp.admin import auth, templates, users
 from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store
 from botsapp.db import DatabaseManager
 from botsapp.message_store import MessageStore
@@ -406,30 +405,9 @@ async def save_metadata(request: Request) -> Response:
     return _redirect_to_tab(jid)
 
 
-async def access_index(_request: Request) -> Response:
-    assert state.db is not None
-    emails = await state.db.list_allowed_emails()
-    return HTMLResponse(templates.access_page(emails, bridge_provider_name()))
-
-
-async def add_allowed_email(request: Request) -> Response:
-    assert state.db is not None
-    form = await request.form()
-    email = _form_str(form, "email").strip()
-    if email:
-        await state.db.add_allowed_email(email)
-    return RedirectResponse(url="/access", status_code=303)
-
-
-async def remove_allowed_email(request: Request) -> Response:
-    assert state.db is not None
-    try:
-        await state.db.remove_allowed_email(request.path_params["email"])
-    except ValueError as exc:  # still owns an account (0025)
-        return HTMLResponse(
-            templates.message_page("Can't remove user", html.escape(str(exc))), status_code=409
-        )
-    return RedirectResponse(url="/access", status_code=303)
+async def access_redirect(_request: Request) -> Response:
+    """The old Access tab lives on as /users (docs/decisions/0026)."""
+    return RedirectResponse(url="/users", status_code=308)
 
 
 app = Starlette(
@@ -442,9 +420,11 @@ app = Starlette(
         Route("/chats", chats_index),
         Route("/chats/{jid}/allow", toggle_allowed, methods=["POST"]),
         Route("/chats/{jid}/metadata", save_metadata, methods=["POST"]),
-        Route("/access", access_index),
-        Route("/access/add", add_allowed_email, methods=["POST"]),
-        Route("/access/{email}/remove", remove_allowed_email, methods=["POST"]),
+        Route("/users", users.users_index),
+        Route("/users/invite", users.invite_user, methods=["POST"]),
+        Route("/users/{email}/role", users.change_role, methods=["POST"]),
+        Route("/users/{email}/remove", users.remove_user, methods=["POST"]),
+        Route("/access", access_redirect),
         *auth.routes,
     ],
     middleware=[Middleware(auth.AuthMiddleware)],

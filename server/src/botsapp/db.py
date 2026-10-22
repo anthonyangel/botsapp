@@ -181,6 +181,12 @@ class DatabaseManager:
         )
         await self.connection.commit()
 
+    async def owned_account_count(self, email: str) -> int:
+        row = await queries.count_accounts_owned_by(
+            self.connection, email=self._normalize_email(email)
+        )
+        return int(row["n"]) if row else 0
+
     async def remove_user(self, email: str) -> None:
         """Delete a user, their grants and what they'd been shown. Refuses if
         they still own an account — transfer or delete that first, so a paired

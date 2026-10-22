@@ -86,9 +86,9 @@ def client(monkeypatch, stub):
         state.db.get_user = AsyncMock(side_effect=lambda e: users.get(e))
         state.db.get_account = AsyncMock(return_value={"owner_email": OWNER})
         state.db.has_account_access = AsyncMock(side_effect=lambda _a, e: e in holders)
-        state.db.list_allowed_emails = AsyncMock(return_value=[])
-        state.db.add_allowed_email = AsyncMock()
-        state.db.remove_allowed_email = AsyncMock()
+        state.db.list_users = AsyncMock(return_value=[])
+        state.db.add_user = AsyncMock()
+        state.db.remove_user = AsyncMock()
         c.cfg = cfg
         yield c
 
@@ -126,7 +126,7 @@ def test_tampered_or_expired_cookie_is_signed_out(client):
 def test_cookie_signed_with_another_secret_is_rejected(client):
     forged = auth._sign(b"x" * 32, {"e": ADMIN}, 60)
     client.cookies.set(auth.SESSION_COOKIE, forged)
-    assert client.get("/access").status_code == 303
+    assert client.get("/users").status_code == 303
 
 
 # ── login flow ───────────────────────────────────────────────────────────────
@@ -218,9 +218,9 @@ def test_signed_in_cookie_without_user_row_is_refused(client):
 
 def test_access_page_is_admin_only(client):
     _sign_in(client, OWNER)
-    assert client.get("/access").status_code == 403
+    assert client.get("/users").status_code == 403
     _sign_in(client, ADMIN)
-    assert client.get("/access").status_code == 200
+    assert client.get("/users").status_code == 200
 
 
 def test_session_pages_are_owner_or_admin_only(client):
@@ -247,11 +247,10 @@ def test_revoked_user_loses_access_on_the_next_request(client):
     assert client.get("/chats").status_code == 403
 
 
-def test_removing_an_account_owner_is_a_conflict_not_a_crash(client):
+def test_legacy_access_path_redirects_to_users(client):
     _sign_in(client, ADMIN)
-    state.db.remove_allowed_email = AsyncMock(side_effect=ValueError("owns 1 account(s)"))
-    r = client.post("/access/owner@example.com/remove", headers=_same_origin())
-    assert r.status_code == 409
+    r = client.get("/access")
+    assert r.status_code == 308 and r.headers["location"] == "/users"
 
 
 # ── CSRF ─────────────────────────────────────────────────────────────────────
@@ -260,22 +259,22 @@ def test_removing_an_account_owner_is_a_conflict_not_a_crash(client):
 def test_cross_site_post_is_refused(client):
     _sign_in(client, ADMIN)
     r = client.post(
-        "/access/add", data={"email": "x@example.com"}, headers={"origin": "https://evil.test"}
+        "/users/invite", data={"email": "x@example.com"}, headers={"origin": "https://evil.test"}
     )
     assert r.status_code == 403
-    state.db.add_allowed_email.assert_not_awaited()
+    state.db.add_user.assert_not_awaited()
 
 
 def test_post_without_origin_or_referer_is_refused(client):
     _sign_in(client, ADMIN)
-    assert client.post("/access/add", data={"email": "x@example.com"}).status_code == 403
+    assert client.post("/users/invite", data={"email": "x@example.com"}).status_code == 403
 
 
 def test_same_origin_post_is_accepted(client):
     _sign_in(client, ADMIN)
-    r = client.post("/access/add", data={"email": "x@example.com"}, headers=_same_origin())
+    r = client.post("/users/invite", data={"email": "x@example.com"}, headers=_same_origin())
     assert r.status_code == 303
-    state.db.add_allowed_email.assert_awaited_once_with("x@example.com")
+    state.db.add_user.assert_awaited_once_with("x@example.com", is_admin=False)
 
 
 # ── config ───────────────────────────────────────────────────────────────────

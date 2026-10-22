@@ -1,6 +1,6 @@
 # 0026 — Admin login via AuthKit, one WorkOS organization, and the authn/authz split
 
-**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Still to do: #49 (users page), #50 (accounts/grants pages), #51 (self-service), #52 (scoped WAHA keys).
+**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Users page implemented in #49 (below). Still to do: #50 (accounts/grants pages), #51 (self-service), #52 (scoped WAHA keys).
 
 ## Context
 
@@ -69,9 +69,17 @@ What WorkOS can express was checked against its own docs ([FGA](https://workos.c
 - Signed (HMAC) `SameSite=Lax`, HTTP-only, `Secure`-on-https session cookie holding only the email; 8 h lifetime. Role and `users` row are looked up per request, so removal or demotion applies on the next click even before the cookie expires.
 - State cookie + nonce on `/login` → `/auth/callback`; `next` is restricted to same-site relative paths.
 - CSRF: `SameSite=Lax` plus a required matching `Origin`/`Referer` on every state-changing request. The existing hand-rolled forms carry no token.
-- Policy: `/access` admins only; `/` and `/session/*` the account's owner or an admin; `/chats*` anyone holding the account. Until the per-account pages (#51) all of these act on the `default` account.
+- Policy: `/users` (and the old `/access`, which redirects) admins only; `/` and `/session/*` the account's owner or an admin; `/chats*` anyone holding the account. Until the per-account pages (#51) all of these act on the `default` account.
 - Fails closed: unconfigured login stops the admin process at startup. Explicit opt-outs: `LOCAL_DEV_DISABLE_AUTH` (shared with the MCP server, local dev) and `ADMIN_DISABLE_AUTH` (admin UI only, for a deployment still reachable by nobody but the owner). The Fly entrypoint backgrounds the admin process, so a refusal to start is silent to health checks; check the logs after deploying.
 - Not yet verified: that the authenticate response carries `organization_id` and `email_verified` as assumed, and the `organization_id` authorize parameter.
+
+## As built (#49, Users page)
+
+- `/users` replaces the Access tab (`/access` redirects). Invite, remove and change role act through a `UserDirectory` protocol (`WorkOSUserDirectory` for real, a stub in tests; the WorkOS request shapes are unverified against a live environment). Needs `WORKOS_ORG_ID` for the WorkOS-connected mode; without it the page edits only the local `users` table and says so.
+- **`users.is_admin` stays, as a mirror of the WorkOS role** (resolving the open question above): the per-request check in the middleware must not call WorkOS. It is written by this page after WorkOS succeeds, and refreshed from WorkOS at every sign-in. Sign-in never demotes `BOTSAPP_ADMIN_EMAIL`, so a missing WorkOS role can't lock the owner out.
+- Ordering: invite = WorkOS then row (invitation revoked if the row can't be saved); remove = pre-checks (owns an account, is yourself) then WorkOS then row (idempotent, so retry heals a half-done removal); role = WorkOS then mirror (WorkOS role restored if the mirror write fails).
+- The acting admin's role is re-checked live against WorkOS on every change. The bootstrap admin is accepted when WorkOS has no role for them yet. There is no "last administrator" guard because the caller must be an admin and cannot target themselves.
+- Users are created on invite, before the invitation is accepted; they can't sign in until they accept. A pending invitation is not shown separately yet.
 
 ## Open check before implementing
 

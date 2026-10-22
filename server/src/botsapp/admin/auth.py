@@ -15,7 +15,7 @@ and have not yet been exercised against a live environment.
 
 Route policy (``_policy``):
 
-* ``/access``                      — admins only
+* ``/users`` (and legacy ``/access``) — admins only
 * ``/`` and ``/session/*``         — the account's owner, or an admin
 * ``/chats*``                      — anyone holding the account
 * ``/login``, ``/auth/callback``, ``/logout`` — public
@@ -51,6 +51,7 @@ from starlette.routing import Route
 
 import botsapp.state as state
 from botsapp.admin import templates
+from botsapp.admin.directory import DirectoryError, UserDirectory, WorkOSUserDirectory
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,9 @@ class AdminAuthConfig:
     secret: bytes
     base_url: str
     organization_id: str | None = None
+    # WorkOS membership management for the Users page; None means the page
+    # edits only the local users table (dev / private-admin mode).
+    directory: UserDirectory | None = None
     # Set only by LOCAL_DEV_DISABLE_AUTH: every request acts as this user.
     dev_user: str | None = None
 
@@ -210,6 +214,7 @@ def config_from_env() -> AdminAuthConfig:
     org = os.environ.get("WORKOS_ORG_ID", "").strip() or None
     return AdminAuthConfig(
         client=WorkOSAuthKitClient(env["WORKOS_CLIENT_ID"], env["WORKOS_API_KEY"], org),
+        directory=WorkOSUserDirectory(env["WORKOS_API_KEY"], org) if org else None,
         secret=env["BOTSAPP_SESSION_SECRET"].encode(),
         base_url=env["ADMIN_BASE_URL"].rstrip("/"),
         organization_id=org,
@@ -271,7 +276,7 @@ def _safe_next(target: str | None) -> str:
 
 
 def _policy(path: str) -> str:
-    if path.startswith("/access"):
+    if path.startswith(("/users", "/access")):
         return "admin"
     if path == "/" or path.startswith("/session"):
         return "owner"
@@ -389,10 +394,31 @@ async def auth_callback(request: Request) -> Response:
     if await state.db.get_user(user.email) is None:
         return _denied(403, f"{user.email} hasn't been invited. Ask an administrator.")
 
+    await _mirror_role(cfg, user.email)
+
     response = RedirectResponse(url=_safe_next(str(pending.get("n", "/"))), status_code=303)
     _set_cookie(response, cfg, SESSION_COOKIE, issue_session(cfg, user.email), SESSION_TTL_SECONDS)
     response.delete_cookie(STATE_COOKIE, path="/")
     return response
+
+
+async def _mirror_role(cfg: AdminAuthConfig, email: str) -> None:
+    """Refresh the local ``is_admin`` mirror from the live WorkOS role at sign-in,
+    so a role changed in the WorkOS dashboard converges. Best effort: a WorkOS
+    outage keeps the stored value. The bootstrap admin is never demoted here, so
+    a missing WorkOS role can't lock the owner out of their own deployment."""
+    assert state.db is not None
+    if cfg.directory is None:
+        return
+    try:
+        role = await cfg.directory.get_role(email)
+    except DirectoryError as exc:
+        logger.warning("could not refresh role for %s: %s", email, exc)
+        return
+    if role is None:
+        return
+    bootstrap = os.environ.get("BOTSAPP_ADMIN_EMAIL", "").strip().lower()
+    await state.db.set_user_admin(email, role == "admin" or email == bootstrap)
 
 
 async def logout(_request: Request) -> Response:

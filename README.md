@@ -37,8 +37,8 @@ Nothing is visible to the MCP server until you do this — see
 ### WorkOS AuthKit setup
 
 The MCP server itself (**http://localhost:8000**) normally requires AuthKit
-login — only emails on the allowlist at **http://localhost:8100/access**
-(the admin UI's Access tab, backed by the same shared DB as the chat
+login — only emails on the allowlist at **http://localhost:8100/users**
+(the admin UI's Users page, backed by the same shared DB as the chat
 allowlist — see [docs/decisions/0015](docs/decisions/0015-email-allowlist-in-db.md))
 can call any tool. Nobody can use the MCP server until you add at least one
 email there. To actually log in via claude.ai:

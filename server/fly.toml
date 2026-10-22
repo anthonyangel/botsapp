@@ -66,5 +66,5 @@ primary_region = "fra"
   # see .env.example) OPENAI_API_KEY are the ones that go through
   # `fly secrets set` instead, never here. There's no ALLOWED_EMAILS to set
   # either way — the email allowlist lives in the DB now, managed from the
-  # admin UI's Access tab. See docs/decisions/0015-email-allowlist-in-db.md.
+  # admin UI's Users page. See docs/decisions/0015 and 0026.
   WORKOS_AUTHKIT_DOMAIN = ""
