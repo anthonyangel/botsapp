@@ -10,13 +10,11 @@ app = "botsapp-waha"
 primary_region = "fra"
 
 [build]
-  # NOT dev-arm here: that tag is arm64-only (Apple Silicon, for local
-  # Compose — see docs/decisions/0007's note and docker-compose.yml's
-  # WAHA_IMAGE override), and Fly Machines default to amd64. Confirmed by
-  # a real deploy failure ("does not support amd64 architecture for linux
-  # os") before landing on this tag — the arm-tag QR-pairing bug that note
-  # describes is specific to the `arm` tag, not this one.
-  image = "devlikeapro/waha:dev"
+  # NOWEB-only image, pinned to a release (no Chromium, which NOWEB doesn't use).
+  # Not `dev`: it only ever added unreleased commits on top of the latest release.
+  # Renovate tracks this tag (see .github/renovate.json5); WAHA bumps wait for a
+  # Dependency Dashboard tick. See docs/decisions/0023.
+  image = "devlikeapro/waha:noweb-2026.9.2"
 
 [[mounts]]
   # One volume, not two: a Fly Machine only supports a single volume mount
@@ -43,21 +41,12 @@ primary_region = "fra"
   memory = "1gb"
 
 [env]
-  # TEMPORARY DIAGNOSTIC SWAP (2026-09-09): was WEBJS. On this Fly machine
-  # WEBJS's headless Chromium could not reliably load web.whatsapp.com —
-  # every session start/restart hit `TimeoutError: Waiting failed: 30000ms
-  # exceeded` or `Navigating frame was detached`, looping forever and never
-  # producing a stable QR/pairing state. Trying NOWEB (no browser, talks the
-  # WhatsApp Web protocol directly) to see if it's specific to WEBJS/Chromium
-  # on this host, or a network-path problem that would hit NOWEB too.
-  #
-  # Caveat (see docker-compose.yml's WEBJS comment, which this contradicts
-  # for now): NOWEB/GOWS are protocol reimplementations previously avoided
-  # because they hit `companion_reg_refresh`-class upstream WhatsApp
-  # breakage that WEBJS sidesteps by driving the real site. If NOWEB fails
-  # here too, that's likely why — not a new bug. If NOWEB turns out to be
-  # the stable choice, promote this to a real docs/decisions/ record
-  # (superseding that comment) instead of leaving it as a fly.toml note.
+  # NOWEB (no browser; talks the WhatsApp Web protocol directly) is the chosen engine
+  # for both Fly and local Compose — see docs/decisions/0023. It replaced WEBJS here
+  # after WEBJS's headless Chromium repeatedly failed to load web.whatsapp.com on this
+  # host (`TimeoutError: Waiting failed: 30000ms exceeded`). The accepted trade-off:
+  # protocol reimplementations can hit upstream breakage (`companion_reg_refresh`
+  # class) that driving the real site avoids.
   WHATSAPP_DEFAULT_ENGINE = "NOWEB"
   # Recommended for NOWEB per WAHA's docs — tracks WhatsApp's current web
   # version automatically instead of pinning one that goes stale.

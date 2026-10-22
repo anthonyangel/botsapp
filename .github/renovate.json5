@@ -51,22 +51,25 @@
 
   customManagers: [
     {
-      // `image = "devlikeapro/waha:dev"` in waha/fly.toml (no built-in Fly manager).
-      // The whole match is what gets replaced, so autoReplaceStringTemplate must
-      // rebuild the full `image = "..."` text — without it Renovate can't add a
-      // pinned digest and fails with "update failure". currentDigest is captured
-      // so later digest bumps work too.
-      // (docker-compose.yml's `${WAHA_IMAGE:-devlikeapro/waha:dev-arm}` default is
-      // deliberately NOT tracked: it's a local arm64 dev tag, and Handlebars can't
-      // express the closing `}` after the optional digest.)
+      // `image = "devlikeapro/waha:noweb-2026.9.2"` in waha/fly.toml (no built-in
+      // Fly manager). WAHA publishes `<engine>-<year>.<month>.<n>` tags; this regex
+      // versioning compares only tags with the same `noweb-` prefix.
       customType: "regex",
       managerFilePatterns: ["/(^|/)waha/fly\\.toml$/"],
-      matchStrings: [
-        'image\\s*=\\s*"(?<depName>[^":@\\s]+):(?<currentValue>[^"@\\s]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"',
-      ],
-      autoReplaceStringTemplate:
-        'image = "{{{depName}}}:{{{newValue}}}{{#if newDigest}}@{{{newDigest}}}{{/if}}"',
+      matchStrings: ['image\\s*=\\s*"(?<depName>[^":@\\s]+):(?<currentValue>[^"@\\s]+)"'],
       datasourceTemplate: "docker",
+      versioningTemplate: "regex:^noweb-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
+    },
+    {
+      // `${WAHA_IMAGE:-devlikeapro/waha:noweb-arm-2026.9.2}` in docker-compose.yml,
+      // which the docker-compose manager can't read through the ${...} syntax.
+      // Digest pinning is off for WAHA (see the WAHA rule), so a version bump only
+      // substitutes the tag and the default string replacement is enough.
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)docker-compose\\.ya?ml$/"],
+      matchStrings: ["\\$\\{WAHA_IMAGE:-(?<depName>[^:}@\\s]+):(?<currentValue>[^}@\\s]+)\\}"],
+      datasourceTemplate: "docker",
+      versioningTemplate: "regex:^noweb-arm-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
     },
   ],
 
@@ -112,12 +115,15 @@
       addLabels: ["docker"],
     },
     {
-      description: "WAHA: moving tags and engine changes have broken the mapper before — never automerge",
+      description: "WAHA: engine changes have broken the mapper before — version bumps are reviewed and never automerged",
       matchPackageNames: ["devlikeapro/waha"],
       groupName: "WAHA",
       addLabels: ["docker", "waha"],
       automerge: false,
-      // The `dev` tag only ever produces digest updates; hold them for a dashboard tick.
+      // Version-pinned tags (noweb-YYYY.M.N), so no digest pin is needed; a pin would also
+      // need a Handlebars template for the compose default (its closing `}` can't be written).
+      pinDigests: false,
+      // Tick the dashboard to open the PR.
       dependencyDashboardApproval: true,
     },
   ],
