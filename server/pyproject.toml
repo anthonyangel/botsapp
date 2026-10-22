@@ -18,6 +18,8 @@ dependencies = [
     # region from a chat's E.164 jid via the same calling-code table
     # libphonenumber uses — no network call, no API key.
     "phonenumbers>=9.0.41",
+    "workos>=10.6",
+    "itsdangerous>=2.2",
 ]
 
 [project.optional-dependencies]

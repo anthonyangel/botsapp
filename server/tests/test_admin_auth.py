@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from starlette.testclient import TestClient
+from workos import TransportError, WorkOSError
 
 import botsapp.admin.app as admin_app
 import botsapp.admin.auth as auth
@@ -340,14 +341,51 @@ def test_unconfigured_login_fails_closed_without_an_explicit_opt_out(monkeypatch
         auth.config_from_env()
 
 
+def _sdk(org: str | None = "org_1"):
+    from workos import AsyncWorkOSClient
+
+    return AsyncWorkOSClient(api_key="sk_test", client_id="client_1"), org
+
+
 def test_workos_authorization_url_shape():
-    url = auth.WorkOSAuthKitClient("client_1", "sk", "org_1").authorization_url(
+    sdk, org = _sdk()
+    url = auth.WorkOSAuthKitClient(sdk, org).authorization_url(
         redirect_uri="https://a.test/auth/callback", state="n"
     )
     query = parse_qs(urlparse(url).query)
-    assert url.startswith("https://api.workos.com/user_management/authorize?")
+    assert urlparse(url).netloc == "api.workos.com"
     assert query["client_id"] == ["client_1"] and query["provider"] == ["authkit"]
     assert query["organization_id"] == ["org_1"] and query["state"] == ["n"]
+    assert query["redirect_uri"] == ["https://a.test/auth/callback"]
+
+
+async def test_workos_exchange_code_maps_the_sdk_response(monkeypatch):
+    from types import SimpleNamespace
+
+    sdk, org = _sdk()
+    response = SimpleNamespace(
+        user=SimpleNamespace(email=" Mixed@Case.com ", email_verified=True),
+        organization_id="org_1",
+    )
+    exchange = AsyncMock(return_value=response)
+    monkeypatch.setattr(sdk.user_management, "authenticate_with_code", exchange)
+    user = await auth.WorkOSAuthKitClient(sdk, org).exchange_code("the-code")
+    exchange.assert_awaited_once_with(code="the-code")
+    assert user == auth.AuthUser("mixed@case.com", True, "org_1")
+
+
+@pytest.mark.parametrize("error", [WorkOSError("nope"), TransportError("down")])
+async def test_workos_exchange_failures_become_auth_errors(monkeypatch, error):
+    sdk, org = _sdk()
+    monkeypatch.setattr(sdk.user_management, "authenticate_with_code", AsyncMock(side_effect=error))
+    with pytest.raises(auth.AuthError):
+        await auth.WorkOSAuthKitClient(sdk, org).exchange_code("x")
+
+
+def test_a_cookie_for_one_purpose_is_not_valid_for_another():
+    state_cookie = auth._sign(SECRET, {"e": ADMIN}, 60, auth._STATE_PURPOSE)
+    assert auth._unsign(SECRET, state_cookie) is None  # not accepted as a session
+    assert auth._unsign(SECRET, state_cookie, auth._STATE_PURPOSE) is not None
 
 
 def test_signed_payload_round_trip_and_expiry():
@@ -358,3 +396,4 @@ def test_signed_payload_round_trip_and_expiry():
     assert time.time() < payload["x"]
     assert auth._unsign(SECRET, auth._sign(SECRET, {"e": "a@b.c"}, -1)) is None
     assert auth._unsign(b"", token) is None
+    assert auth._unsign(SECRET, token + "x") is None

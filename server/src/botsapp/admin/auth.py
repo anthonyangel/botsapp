@@ -30,11 +30,8 @@ forms carry no token.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import html
-import json
 import logging
 import os
 import secrets
@@ -43,11 +40,12 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlencode, urlparse
 
-import aiohttp
+from itsdangerous import BadSignature, URLSafeSerializer
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
+from workos import AsyncWorkOSClient, TransportError, WorkOSError
 
 import botsapp.state as state
 from botsapp.admin import templates
@@ -87,56 +85,29 @@ class AuthKitClient(Protocol):
 
 
 class WorkOSAuthKitClient:
-    """WorkOS User Management: authorize redirect + code exchange."""
+    """AuthKit login via the official ``workos`` SDK (authorize URL + code exchange)."""
 
-    _BASE = "https://api.workos.com/user_management"
-
-    def __init__(self, client_id: str, api_key: str, organization_id: str | None = None) -> None:
-        self._client_id = client_id
-        self._api_key = api_key
+    def __init__(self, client: AsyncWorkOSClient, organization_id: str | None = None) -> None:
+        self._client = client
         self._organization_id = organization_id
 
     def authorization_url(self, *, redirect_uri: str, state: str) -> str:
-        params = {
-            "client_id": self._client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "provider": "authkit",
-            "state": state,
-        }
-        if self._organization_id:
-            params["organization_id"] = self._organization_id
-        return f"{self._BASE}/authorize?{urlencode(params)}"
+        return self._client.user_management.get_authorization_url(
+            redirect_uri=redirect_uri,
+            provider="authkit",
+            state=state,
+            organization_id=self._organization_id,
+        )
 
     async def exchange_code(self, code: str) -> AuthUser:
-        payload = {
-            "client_id": self._client_id,
-            "client_secret": self._api_key,
-            "grant_type": "authorization_code",
-            "code": code,
-        }
         try:
-            async with (
-                aiohttp.ClientSession() as http,
-                http.post(
-                    f"{self._BASE}/authenticate",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp,
-            ):
-                if resp.status != 200:
-                    raise AuthError(f"WorkOS authenticate returned {resp.status}")
-                data = await resp.json()
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            raise AuthError(f"WorkOS unreachable: {exc}") from exc
-        user = data.get("user") or {}
-        email = (user.get("email") or "").strip().lower()
-        if not email:
-            raise AuthError("WorkOS response carried no email")
+            response = await self._client.user_management.authenticate_with_code(code=code)
+        except (WorkOSError, TransportError) as exc:
+            raise AuthError(f"WorkOS authenticate failed: {exc}") from exc
         return AuthUser(
-            email=email,
-            email_verified=bool(user.get("email_verified")),
-            organization_id=data.get("organization_id"),
+            email=response.user.email.strip().lower(),
+            email_verified=response.user.email_verified,
+            organization_id=response.organization_id,
         )
 
 
@@ -152,8 +123,14 @@ class AdminAuthConfig:
     # WorkOS membership management for the Users page; None means the page
     # edits only the local users table (dev / private-admin mode).
     directory: UserDirectory | None = None
+    # The SDK client behind `client`/`directory`, kept so shutdown can close it.
+    workos_client: AsyncWorkOSClient | None = None
     # Set only by LOCAL_DEV_DISABLE_AUTH: every request acts as this user.
     dev_user: str | None = None
+
+    async def aclose(self) -> None:
+        if self.workos_client is not None:
+            await self.workos_client.close()
 
     @property
     def secure_cookies(self) -> bool:
@@ -212,9 +189,11 @@ def config_from_env() -> AdminAuthConfig:
             f"BOTSAPP_SESSION_SECRET must be at least {MIN_SECRET_LENGTH} characters"
         )
     org = os.environ.get("WORKOS_ORG_ID", "").strip() or None
+    workos = AsyncWorkOSClient(api_key=env["WORKOS_API_KEY"], client_id=env["WORKOS_CLIENT_ID"])
     return AdminAuthConfig(
-        client=WorkOSAuthKitClient(env["WORKOS_CLIENT_ID"], env["WORKOS_API_KEY"], org),
-        directory=WorkOSUserDirectory(env["WORKOS_API_KEY"], org) if org else None,
+        client=WorkOSAuthKitClient(workos, org),
+        directory=WorkOSUserDirectory(workos, org) if org else None,
+        workos_client=workos,
         secret=env["BOTSAPP_SESSION_SECRET"].encode(),
         base_url=env["ADMIN_BASE_URL"].rstrip("/"),
         organization_id=org,
@@ -224,31 +203,29 @@ def config_from_env() -> AdminAuthConfig:
 # ── Signed cookies ───────────────────────────────────────────────────────────
 
 
-def _b64(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+_SESSION_PURPOSE = "session"
+_STATE_PURPOSE = "oauth-state"
 
 
-def _unb64(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+def _serializer(secret: bytes, purpose: str) -> URLSafeSerializer:
+    # The purpose is the salt, so a cookie signed for one use (e.g. the login
+    # state) can never be replayed as another (a session).
+    return URLSafeSerializer(secret, salt=f"botsapp-admin-{purpose}")
 
 
-def _sign(secret: bytes, payload: dict[str, Any], ttl: int) -> str:
-    body = _b64(json.dumps({**payload, "x": int(time.time()) + ttl}).encode())
-    sig = _b64(hmac.new(secret, body.encode(), hashlib.sha256).digest())
-    return f"{body}.{sig}"
+def _sign(secret: bytes, payload: dict[str, Any], ttl: int, purpose: str = _SESSION_PURPOSE) -> str:
+    return _serializer(secret, purpose).dumps({**payload, "x": int(time.time()) + ttl})
 
 
-def _unsign(secret: bytes, token: str | None) -> dict[str, Any] | None:
+def _unsign(
+    secret: bytes, token: str | None, purpose: str = _SESSION_PURPOSE
+) -> dict[str, Any] | None:
     """The payload if the signature is valid and unexpired, else None."""
-    if not token or not secret or token.count(".") != 1:
-        return None
-    body, sig = token.split(".")
-    expected = _b64(hmac.new(secret, body.encode(), hashlib.sha256).digest())
-    if not hmac.compare_digest(sig, expected):
+    if not token or not secret:
         return None
     try:
-        payload = json.loads(_unb64(body))
-    except ValueError:
+        payload = _serializer(secret, purpose).loads(token)
+    except BadSignature:
         return None
     if not isinstance(payload, dict) or payload.get("x", 0) < time.time():
         return None
@@ -363,6 +340,7 @@ async def login(request: Request) -> Response:
         cfg.secret,
         {"s": nonce, "n": _safe_next(request.query_params.get("next"))},
         STATE_TTL_SECONDS,
+        _STATE_PURPOSE,
     )
     url = cfg.client.authorization_url(redirect_uri=cfg.redirect_uri, state=nonce)
     response = RedirectResponse(url=url, status_code=303)
@@ -376,7 +354,7 @@ async def auth_callback(request: Request) -> Response:
     if cfg.client is None:
         return RedirectResponse(url="/", status_code=303)
 
-    pending = _unsign(cfg.secret, request.cookies.get(STATE_COOKIE))
+    pending = _unsign(cfg.secret, request.cookies.get(STATE_COOKIE), _STATE_PURPOSE)
     returned = request.query_params.get("state", "")
     code = request.query_params.get("code", "")
     if not pending or not code or not hmac.compare_digest(str(pending.get("s", "")), returned):

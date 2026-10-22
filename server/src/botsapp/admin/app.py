@@ -83,6 +83,8 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
     await state.db.close()
     state.db = None
     state.bridge = None
+    if auth.config is not None:
+        await auth.config.aclose()
     auth.config = None
     _raw_store = None
 
