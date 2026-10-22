@@ -40,3 +40,17 @@ Add `choose_group(query, tags)`:
 - Left alone: the `ctx.elicit()` confirmations in the permanently blocked outbound tools raise on
   modern connections (FastMCP 4 era-gates `ctx.elicit`). Unreachable today; would need the same
   multi-round pattern if a tool were ever unblocked.
+
+## Update: first live result (2026-10-22)
+
+On the deployed server the **Claude iOS app** loaded the tool and called it, then answered the picker
+with `cancel` on its own — no picker is shown on that surface. Two things followed:
+
+- An empty `input_responses` map is not an answer (FastMCP documents it as `None` *or* "retried without
+  responses"), so a request counts as an answer only if it carries the `group` key (#42), and the result
+  states which action the client replied with.
+- **`choose_group` degrades to chat instead of failing.** On `cancel` (dismissed, or a client that can't
+  render the picker) the result carries `candidates`, and the model puts the same choice to the user in
+  chat; an explicit `decline` returns no candidates and is not re-asked. This keeps one tool that is
+  interactive where supported, with no need to detect the client (the only public signal for that is
+  absent). Not yet checked: whether claude.ai web or the desktop app render the picker.
