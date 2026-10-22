@@ -1,0 +1,110 @@
+// Renovate config — see docs/decisions/0020-renovate-dependency-management.md.
+// Run by .github/workflows/renovate.yml (self-hosted); the Dependency
+// Dashboard is the issue Renovate maintains on this repo.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended", // includes the dependency dashboard
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommitsDisabled",
+  ],
+
+  dependencyDashboard: true,
+  dependencyDashboardTitle: "Dependency Dashboard",
+  dependencyDashboardAutoclose: false,
+
+  labels: ["dependencies"],
+  timezone: "Etc/UTC",
+  // Weekly batch keeps PR noise down; security updates ignore this schedule.
+  schedule: ["before 6am on monday"],
+  prConcurrentLimit: 5,
+  prHourlyLimit: 4,
+  rebaseWhen: "conflicted",
+
+  // Advisories from OSV (covers PyPI) as well as GitHub's own.
+  vulnerabilityAlerts: { enabled: true, labels: ["dependencies", "security"], schedule: ["at any time"] },
+  osvVulnerabilityAlerts: true,
+
+  // uv.lock refresh: transitive bumps within existing constraints.
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 6am on the first day of the month"],
+  },
+
+  // pyproject.toml uses ">=" floors and uv.lock holds the real pins, so by
+  // default only the lockfile moves; floors are raised only when needed.
+  pep621: { rangeStrategy: "update-lockfile" },
+
+  customManagers: [
+    {
+      // `image = "devlikeapro/waha:dev"` in waha/fly.toml (no built-in Fly manager).
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)waha/fly\\.toml$/"],
+      matchStrings: ['image\\s*=\\s*"(?<depName>[^":\\s]+):(?<currentValue>[^"\\s]+)"'],
+      datasourceTemplate: "docker",
+    },
+    {
+      // `${WAHA_IMAGE:-devlikeapro/waha:dev-arm}` default in docker-compose.yml,
+      // which the docker-compose manager can't read through the ${...} syntax.
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)docker-compose\\.ya?ml$/"],
+      matchStrings: ["\\$\\{WAHA_IMAGE:-(?<depName>[^:}\\s]+):(?<currentValue>[^}\\s]+)\\}"],
+      datasourceTemplate: "docker",
+    },
+  ],
+
+  packageRules: [
+    {
+      description: "GitHub Actions: one PR for all action bumps",
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+      addLabels: ["ci"],
+    },
+    {
+      description: "Python dev tooling (lint/type/test) moves together",
+      matchManagers: ["pep621"],
+      matchDepTypes: ["project.optional-dependencies"],
+      groupName: "Python dev tooling",
+      addLabels: ["python"],
+    },
+    {
+      description: "Python runtime deps: separate from dev tooling",
+      matchManagers: ["pep621"],
+      matchDepTypes: ["project.dependencies"],
+      addLabels: ["python"],
+    },
+    {
+      description: "MCP stack: review each bump, it defines the public protocol surface",
+      matchPackageNames: ["fastmcp", "mcp"],
+      groupName: "MCP stack",
+      addLabels: ["mcp"],
+      dependencyDashboardApproval: false,
+      automerge: false,
+    },
+    {
+      description: "Python interpreter: Dockerfile, .python-version and ty must agree — manual",
+      matchPackageNames: ["python"],
+      matchDatasources: ["docker", "python-version"],
+      groupName: "Python runtime",
+      addLabels: ["python"],
+      // A new minor needs `[tool.ty.environment] python-version` and
+      // `requires-python` updated by hand; wait for a dashboard tick.
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: "Container base images (Dockerfile, uv)",
+      matchManagers: ["dockerfile"],
+      addLabels: ["docker"],
+    },
+    {
+      description: "WAHA: moving tags and engine changes have broken the mapper before — never automerge",
+      matchPackageNames: ["devlikeapro/waha"],
+      groupName: "WAHA",
+      addLabels: ["docker", "waha"],
+      automerge: false,
+      // Rolling tags (dev, dev-arm) only produce digest updates; hold them for a tick.
+      dependencyDashboardApproval: true,
+    },
+  ],
+}
