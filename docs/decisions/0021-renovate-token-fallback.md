@@ -9,7 +9,7 @@ The first run after 0020 merged failed in 10s: `RENOVATE_TOKEN` didn't exist. Th
 workflow was then switched to `GITHUB_TOKEN` directly, and the next run went
 green — but did nothing. The job's `permissions: contents: read` made every
 write fail (`Could not ensure issue ... integration-unauthorized`, so no
-Dependency Dashboard), yet Renovate exits 0, so the run reported success.
+Dependency Dashboard), yet Renovate exits 0 for warnings, so the run reported success.
 
 ## Decision
 
@@ -21,14 +21,21 @@ Dependency Dashboard), yet Renovate exits 0, so the run reported success.
   PRs Renovate opens won't trigger CI; and the repo setting *Actions → General →
   "Allow GitHub Actions to create and approve pull requests"* must be on. The
   run prints a warning annotation saying so.
-- **A run that can't write fails:** Renovate logs warn+ to a JSON-lines file and
-  `.github/scripts/check_renovate_log.py` fails the job on any error-level entry
-  or known write failure (`Could not ensure/create/update ...`,
-  `integration-unauthorized`, `Resource not accessible`, `refusing to allow`).
+- **A run that can't write fails — via Renovate's exit code, no wrapper.**
+  Renovate exits non-zero only when an *error-level* entry was logged
+  (renovatebot/renovate#1338, #3605 made that so), and its write failures are
+  logged as *warnings*. `logLevelRemap` in `.github/renovate.json5` promotes the
+  GitHub write-failure messages (`Could not ensure issue`, `Error updating
+  branch`, `Error updating PR`, `Error ensuring comment`) to errors, so the
+  action step fails on its own. Checked locally: a remapped warning logs as
+  ERROR and the exit code flips 0 → 1. (An earlier draft parsed Renovate's log
+  file in a script; dropped in favour of this.)
 
 ## Consequences
 
 Dashboard and Python/Docker updates work without creating a PAT. Without CI on
 Renovate PRs, merging them relies on running checks by hand or adding the PAT
-later; the warning is the reminder. The log patterns are a heuristic — an
-unrecognised write failure at warn level would still pass.
+later; the warning is the reminder. The remap list is
+hand-picked from Renovate's source (v42/v44): a write failure logged under a
+message not on it would still exit 0, and a Renovate release that rewords one
+of these messages silently stops matching. Review the list when bumping Renovate.
