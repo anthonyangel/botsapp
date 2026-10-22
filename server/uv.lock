@@ -315,7 +315,7 @@ requires-dist = [
     { name = "phonenumbers", specifier = ">=8.13" },
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.26.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.14" },
     { name = "python-dotenv", specifier = ">=1.0.0" },

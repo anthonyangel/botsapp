@@ -23,7 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
-    "pytest-asyncio>=0.24",
+    "pytest-asyncio>=0.26.0",
     "pytest-mock>=3.14",
     # aresponses, not aioresponses — it runs a real local aiohttp test
     # server instead of monkeypatching aiohttp's internal response
