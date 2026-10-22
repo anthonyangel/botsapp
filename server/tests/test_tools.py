@@ -11,7 +11,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Audio, File, Image
+from mcp.types import ResourceLink
 
 from botsapp.bridge import GroupInfo, SendResult
 from botsapp.message_store import ChatNotAllowedError
@@ -52,14 +54,23 @@ from botsapp.tools import (
 async def test_list_chats_delegates_to_message_store(mock_message_store: AsyncMock):
     mock_message_store.get_chats.return_value = [{"id": "1", "name": "Alice"}]
     result = await list_chats(limit=10)
-    mock_message_store.get_chats.assert_awaited_once_with(limit=10, offset=0)
-    assert result == [{"id": "1", "name": "Alice"}]
+    mock_message_store.get_chats.assert_awaited_once_with(limit=11, offset=0)
+    assert result == {"items": [{"id": "1", "name": "Alice"}], "next_offset": None}
+
+
+async def test_list_chats_reports_next_offset_when_more_results_exist(
+    mock_message_store: AsyncMock,
+):
+    # The tool fetches limit+1 rows; the extra one only signals "more exist".
+    mock_message_store.get_chats.return_value = [{"id": "1"}, {"id": "2"}, {"id": "3"}]
+    result = await list_chats(limit=2, offset=4)
+    assert result == {"items": [{"id": "1"}, {"id": "2"}], "next_offset": 6}
 
 
 async def test_list_chats_default_limit(mock_message_store: AsyncMock):
     mock_message_store.get_chats.return_value = []
     await list_chats()
-    mock_message_store.get_chats.assert_awaited_once_with(limit=50, offset=0)
+    mock_message_store.get_chats.assert_awaited_once_with(limit=51, offset=0)
 
 
 async def test_list_chats_clamps_excessive_limit(mock_message_store: AsyncMock):
@@ -69,20 +80,23 @@ async def test_list_chats_clamps_excessive_limit(mock_message_store: AsyncMock):
     # instead of row size). See MAX_LIST_LIMIT in tools.py.
     mock_message_store.get_chats.return_value = []
     await list_chats(limit=1_000_000)
-    mock_message_store.get_chats.assert_awaited_once_with(limit=200, offset=0)
+    mock_message_store.get_chats.assert_awaited_once_with(limit=201, offset=0)
 
 
-async def test_list_chats_returns_error_dict_on_exception(mock_message_store: AsyncMock):
+async def test_list_chats_raises_tool_error_without_leaking_internals(
+    mock_message_store: AsyncMock,
+):
     mock_message_store.get_chats.side_effect = RuntimeError("pool closed")
-    result = await list_chats()
-    assert result == [{"error": "pool closed"}]
+    with pytest.raises(ToolError) as exc_info:
+        await list_chats()
+    assert "pool closed" not in str(exc_info.value)
 
 
 async def test_list_chats_by_query_uses_search_chats(mock_message_store: AsyncMock):
     mock_message_store.search_chats.return_value = [{"jid": "a@g.us", "name": "Alice"}]
     result = await list_chats(query="Alice")
-    mock_message_store.search_chats.assert_awaited_once_with(query="Alice", limit=50, offset=0)
-    assert result == [{"jid": "a@g.us", "name": "Alice"}]
+    mock_message_store.search_chats.assert_awaited_once_with(query="Alice", limit=51, offset=0)
+    assert result == {"items": [{"jid": "a@g.us", "name": "Alice"}], "next_offset": None}
 
 
 async def test_list_chats_by_tags_uses_db_search_by_tags(
@@ -104,16 +118,35 @@ async def test_list_chats_by_tags_uses_db_search_by_tags(
     result = await list_chats(tags=["vip"])
     mock_db.search_by_tags.assert_awaited_once_with(tags=["vip"])
     mock_message_store.get_chat.assert_awaited_once_with("a@g.us")
-    assert result == [
-        {
-            "id": "1",
-            "jid": "a@g.us",
-            "name": "Alice",
-            "unread_count": 0,
-            "last_message": "hi",
-            "last_message_at": "2026-01-01T00:00:00Z",
-        }
+    assert result == {
+        "items": [
+            {
+                "id": "1",
+                "jid": "a@g.us",
+                "name": "Alice",
+                "unread_count": 0,
+                "last_message": "hi",
+                "last_message_at": "2026-01-01T00:00:00Z",
+            }
+        ],
+        "next_offset": None,
+    }
+
+
+async def test_list_chats_by_tags_paginates_after_dropping_unresolved_matches(
+    mock_db: AsyncMock, mock_message_store: AsyncMock
+):
+    # The first match has no chat record; offset must count resolved chats,
+    # not raw tag matches, or this page would come back short/empty.
+    mock_db.search_by_tags.return_value = [
+        {"jid": "gone@g.us"},
+        {"jid": "a@g.us"},
+        {"jid": "b@g.us"},
     ]
+    chats = {"a@g.us": {"jid": "a@g.us"}, "b@g.us": {"jid": "b@g.us"}}
+    mock_message_store.get_chat.side_effect = lambda jid: chats.get(jid)
+    result = await list_chats(tags=["vip"], limit=1)
+    assert result == {"items": [{"jid": "a@g.us"}], "next_offset": 1}
 
 
 async def test_list_chats_by_tags_skips_matches_with_no_chat_record(
@@ -122,14 +155,14 @@ async def test_list_chats_by_tags_skips_matches_with_no_chat_record(
     mock_db.search_by_tags.return_value = [{"jid": "a@g.us", "tags": ["vip"]}]
     mock_message_store.get_chat.return_value = None
     result = await list_chats(tags=["vip"])
-    assert result == []
+    assert result == {"items": [], "next_offset": None}
 
 
 async def test_list_messages_passes_all_params(mock_message_store: AsyncMock):
     mock_message_store.list_messages.return_value = []
     await list_messages(jid="972123@s.whatsapp.net", limit=20, offset=40)
     mock_message_store.list_messages.assert_awaited_once_with(
-        jid="972123@s.whatsapp.net", limit=20, offset=40
+        jid="972123@s.whatsapp.net", limit=21, offset=40
     )
 
 
@@ -137,7 +170,7 @@ async def test_list_messages_defaults(mock_message_store: AsyncMock):
     mock_message_store.list_messages.return_value = []
     await list_messages(jid="972123@s.whatsapp.net")
     mock_message_store.list_messages.assert_awaited_once_with(
-        jid="972123@s.whatsapp.net", limit=50, offset=0
+        jid="972123@s.whatsapp.net", limit=51, offset=0
     )
 
 
@@ -145,7 +178,7 @@ async def test_list_messages_clamps_excessive_limit(mock_message_store: AsyncMoc
     mock_message_store.list_messages.return_value = []
     await list_messages(jid="972123@s.whatsapp.net", limit=1_000_000)
     mock_message_store.list_messages.assert_awaited_once_with(
-        jid="972123@s.whatsapp.net", limit=200, offset=0
+        jid="972123@s.whatsapp.net", limit=201, offset=0
     )
 
 
@@ -153,8 +186,8 @@ async def test_list_messages_not_allowed_returns_error(mock_message_store: Async
     mock_message_store.list_messages.side_effect = ChatNotAllowedError(
         "chat 'x@g.us' is not in the allowlist"
     )
-    result = await list_messages(jid="x@g.us")
-    assert "not in the allowlist" in result[0]["error"]
+    with pytest.raises(ToolError, match="not in the allowlist"):
+        await list_messages(jid="x@g.us")
 
 
 # ── Write tools ───────────────────────────────────────────────────────────────
@@ -254,8 +287,8 @@ async def test_list_groups_include_communities(mock_bridge: AsyncMock):
 
 async def test_list_groups_error(mock_bridge: AsyncMock):
     mock_bridge.list_groups.side_effect = RuntimeError("timeout")
-    result = await list_groups()
-    assert "error" in result[0]
+    with pytest.raises(ToolError):
+        await list_groups()
 
 
 async def test_list_groups_filters_by_tags(mock_bridge: AsyncMock, mock_db: AsyncMock):
@@ -412,8 +445,8 @@ async def test_list_communities_filters_by_query_and_tags(
 
 async def test_list_communities_error(mock_bridge: AsyncMock):
     mock_bridge.list_groups.side_effect = RuntimeError("timeout")
-    result = await list_communities()
-    assert "error" in result[0]
+    with pytest.raises(ToolError):
+        await list_communities()
 
 
 async def test_list_communities_never_leaks_participant_count_or_invite_link(
@@ -466,8 +499,8 @@ async def test_get_group_info_includes_invite_link(mock_bridge: AsyncMock):
 
 async def test_get_group_info_not_allowed_returns_error(mock_bridge: AsyncMock, mock_db: AsyncMock):
     mock_db.list_allowed_jids.return_value = set()
-    result = await get_group_info(jid="g1@g.us")
-    assert "not in the allowlist" in result["error"]
+    with pytest.raises(ToolError, match="not in the allowlist"):
+        await get_group_info(jid="g1@g.us")
     mock_bridge.get_group_info.assert_not_awaited()
 
 
@@ -497,16 +530,17 @@ async def test_search_messages_delegates_to_message_store(mock_message_store: As
     mock_message_store.search_messages.return_value = [{"message_id": "m1", "text": "hello"}]
     result = await search_messages(query="hello", jid="123@s.whatsapp.net", limit=10)
     mock_message_store.search_messages.assert_awaited_once_with(
-        query="hello", jid="123@s.whatsapp.net", limit=10, offset=0
+        query="hello", jid="123@s.whatsapp.net", limit=11, offset=0
     )
-    assert result[0]["text"] == "hello"
+    assert result["items"][0]["text"] == "hello"
+    assert result["next_offset"] is None
 
 
 async def test_search_messages_defaults(mock_message_store: AsyncMock):
     mock_message_store.search_messages.return_value = []
     await search_messages(query="test")
     mock_message_store.search_messages.assert_awaited_once_with(
-        query="test", jid=None, limit=50, offset=0
+        query="test", jid=None, limit=51, offset=0
     )
 
 
@@ -514,22 +548,22 @@ async def test_search_messages_clamps_excessive_limit(mock_message_store: AsyncM
     mock_message_store.search_messages.return_value = []
     await search_messages(query="test", limit=1_000_000)
     mock_message_store.search_messages.assert_awaited_once_with(
-        query="test", jid=None, limit=200, offset=0
+        query="test", jid=None, limit=201, offset=0
     )
 
 
 async def test_search_messages_error(mock_message_store: AsyncMock):
     mock_message_store.search_messages.side_effect = Exception("db error")
-    result = await search_messages(query="x")
-    assert "error" in result[0]
+    with pytest.raises(ToolError):
+        await search_messages(query="x")
 
 
 async def test_search_messages_not_allowed_returns_error(mock_message_store: AsyncMock):
     mock_message_store.search_messages.side_effect = ChatNotAllowedError(
         "chat 'x@g.us' is not in the allowlist"
     )
-    result = await search_messages(query="hi", jid="x@g.us")
-    assert "not in the allowlist" in result[0]["error"]
+    with pytest.raises(ToolError, match="not in the allowlist"):
+        await search_messages(query="hi", jid="x@g.us")
 
 
 # ── Chat metadata tools ─────────────────────────────────────────────────
@@ -561,14 +595,14 @@ async def test_add_tag_is_idempotent(mock_db: AsyncMock):
 
 async def test_add_tag_error(mock_db: AsyncMock):
     mock_db.get_chat_metadata.side_effect = Exception("db error")
-    result = await add_tag(jid="123@s.whatsapp.net", tag="vip")
-    assert "error" in result
+    with pytest.raises(ToolError):
+        await add_tag(jid="123@s.whatsapp.net", tag="vip")
 
 
 async def test_add_tag_not_allowed_returns_error(mock_db: AsyncMock):
     mock_db.list_allowed_jids.return_value = set()
-    result = await add_tag(jid="123@s.whatsapp.net", tag="vip")
-    assert "not in the allowlist" in result["error"]
+    with pytest.raises(ToolError, match="not in the allowlist"):
+        await add_tag(jid="123@s.whatsapp.net", tag="vip")
     mock_db.upsert_chat_metadata.assert_not_awaited()
 
 
@@ -598,14 +632,14 @@ async def test_remove_tag_no_existing_metadata(mock_db: AsyncMock):
 
 async def test_remove_tag_error(mock_db: AsyncMock):
     mock_db.get_chat_metadata.side_effect = Exception("db error")
-    result = await remove_tag(jid="123@s.whatsapp.net", tag="vip")
-    assert "error" in result
+    with pytest.raises(ToolError):
+        await remove_tag(jid="123@s.whatsapp.net", tag="vip")
 
 
 async def test_remove_tag_not_allowed_returns_error(mock_db: AsyncMock):
     mock_db.list_allowed_jids.return_value = set()
-    result = await remove_tag(jid="123@s.whatsapp.net", tag="vip")
-    assert "not in the allowlist" in result["error"]
+    with pytest.raises(ToolError, match="not in the allowlist"):
+        await remove_tag(jid="123@s.whatsapp.net", tag="vip")
     mock_db.upsert_chat_metadata.assert_not_awaited()
 
 
@@ -618,14 +652,14 @@ async def test_clear_tags_saves_empty_list(mock_db: AsyncMock):
 
 async def test_clear_tags_error(mock_db: AsyncMock):
     mock_db.upsert_chat_metadata.side_effect = Exception("db error")
-    result = await clear_tags(jid="123@s.whatsapp.net")
-    assert "error" in result
+    with pytest.raises(ToolError):
+        await clear_tags(jid="123@s.whatsapp.net")
 
 
 async def test_clear_tags_not_allowed_returns_error(mock_db: AsyncMock):
     mock_db.list_allowed_jids.return_value = set()
-    result = await clear_tags(jid="123@s.whatsapp.net")
-    assert "not in the allowlist" in result["error"]
+    with pytest.raises(ToolError, match="not in the allowlist"):
+        await clear_tags(jid="123@s.whatsapp.net")
     mock_db.upsert_chat_metadata.assert_not_awaited()
 
 
@@ -648,14 +682,14 @@ async def test_get_chat_metadata_not_found(mock_db: AsyncMock):
 
 async def test_get_chat_metadata_error(mock_db: AsyncMock):
     mock_db.get_chat_metadata.side_effect = Exception("db error")
-    result = await get_chat_metadata(jid="123@s.whatsapp.net")
-    assert "error" in result
+    with pytest.raises(ToolError):
+        await get_chat_metadata(jid="123@s.whatsapp.net")
 
 
 async def test_get_chat_metadata_not_allowed_returns_error(mock_db: AsyncMock):
     mock_db.list_allowed_jids.return_value = set()
-    result = await get_chat_metadata(jid="123@s.whatsapp.net")
-    assert "not in the allowlist" in result["error"]
+    with pytest.raises(ToolError, match="not in the allowlist"):
+        await get_chat_metadata(jid="123@s.whatsapp.net")
     mock_db.get_chat_metadata.assert_not_awaited()
 
 
@@ -879,9 +913,12 @@ async def test_get_media_returns_presigned_link_for_document_when_tigris_configu
 
     result = await get_media(message_id="M1")
 
-    assert isinstance(result, str)
-    assert "Q4 Slides.pptx" in result
-    assert "https://fly.storage.tigris.dev/fake-presigned-url" in result
+    assert isinstance(result, list)
+    description, link = result
+    assert isinstance(description, str) and "Q4 Slides.pptx" in description
+    assert isinstance(link, ResourceLink)
+    assert str(link.uri) == "https://fly.storage.tigris.dev/fake-presigned-url"
+    assert link.name == "Q4 Slides.pptx"
     upload_mock.assert_awaited_once_with(
         b"fake-pptx-bytes",
         "Q4 Slides.pptx",
@@ -907,8 +944,11 @@ async def test_get_media_returns_presigned_link_for_video_when_tigris_configured
 
     result = await get_media(message_id="M1")
 
-    assert isinstance(result, str)
-    assert "https://fly.storage.tigris.dev/fake-video-url" in result
+    assert isinstance(result, list)
+    _, link = result
+    assert isinstance(link, ResourceLink)
+    assert str(link.uri) == "https://fly.storage.tigris.dev/fake-video-url"
+    assert link.mimeType == "video/mp4"
 
 
 async def test_get_media_falls_back_to_file_when_tigris_upload_fails(
@@ -930,6 +970,22 @@ async def test_get_media_falls_back_to_file_when_tigris_upload_fails(
 
     assert isinstance(result, File)
     assert result.data == pptx_bytes
+
+
+async def test_get_media_refuses_oversized_inline_media(
+    mock_db: AsyncMock, mock_message_store: AsyncMock, monkeypatch
+):
+    mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
+    mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
+    monkeypatch.setattr("botsapp.tools.MAX_INLINE_MEDIA_BYTES", 8)
+    mock_message_store.get_media.return_value = {
+        "data": b"0123456789",
+        "mimetype": "image/jpeg",
+        "filename": None,
+    }
+
+    with pytest.raises(ToolError, match="inline limit"):
+        await get_media(message_id="M1")
 
 
 async def test_get_media_not_allowed_raises(mock_db: AsyncMock, mock_message_store: AsyncMock):
@@ -1146,3 +1202,34 @@ async def test_delete_message_elicitation_declined(mock_bridge: AsyncMock):
     ctx.elicit.assert_awaited_once()
     mock_bridge.delete_message.assert_not_awaited()
     assert result["status"] == "cancelled"
+
+
+# ── Protocol-level metadata ──────────────────────────────────────────────
+
+
+async def test_reachable_tools_advertise_annotations_and_output_schema():
+    from botsapp.app import mcp
+
+    # run_middleware=False skips the auth checks (no caller here); a Client would run
+    # the lifespan, which needs a real DATABASE_URL and WAHA bridge.
+    tools = {t.name: t for t in await mcp.list_tools(run_middleware=False)}
+
+    read_only = {
+        "list_chats",
+        "list_messages",
+        "search_messages",
+        "get_group_info",
+        "list_groups",
+        "list_communities",
+        "get_chat_metadata",
+        "get_media",
+    }
+    for name in read_only:
+        assert tools[name].annotations is not None, name
+        assert tools[name].annotations.readOnlyHint is True, name
+        assert tools[name].title, name
+    for name in ("add_tag", "remove_tag", "clear_tags"):
+        assert tools[name].annotations.readOnlyHint is False, name
+        assert tools[name].annotations.idempotentHint is True, name
+    for name in read_only - {"get_media"}:
+        assert tools[name].output_schema, name
