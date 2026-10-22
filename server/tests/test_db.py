@@ -229,10 +229,14 @@ async def test_bootstrap_adopts_legacy_chat_metadata_and_is_idempotent(db: Datab
 
 async def test_visibility_is_per_viewer(db: DatabaseManager):
     await _two_users(db)
-    await db.set_chat_access_allowed("default", "me@example.com", "a@g.us", True)
+    await db.set_chat_access_allowed(
+        "default", "me@example.com", "a@g.us", True, acting_email="me@example.com"
+    )
     await db.grant_account("default", "her@example.com")
     assert await db.list_allowed_jids_for("default", "her@example.com") == set()
-    await db.set_chat_access_allowed("default", "her@example.com", "b@g.us", True)
+    await db.set_chat_access_allowed(
+        "default", "her@example.com", "b@g.us", True, acting_email="me@example.com"
+    )
     assert await db.list_allowed_jids_for("default", "her@example.com") == {"b@g.us"}
     assert await db.list_allowed_jids_for("default", "me@example.com") == {"a@g.us"}
 
@@ -241,7 +245,9 @@ async def test_tags_are_per_viewer(db: DatabaseManager):
     await _two_users(db)
     await db.grant_account("default", "her@example.com")
     for who, tag in (("me@example.com", "mine"), ("her@example.com", "hers")):
-        await db.set_chat_access_allowed("default", who, "a@g.us", True)
+        await db.set_chat_access_allowed(
+            "default", who, "a@g.us", True, acting_email="me@example.com"
+        )
         await db.upsert_chat_access_tags("default", who, "a@g.us", [tag])
     assert await db.search_by_tags_for("default", "her@example.com", ["mine"]) == []
     assert len(await db.search_by_tags_for("default", "her@example.com", ["hers"])) == 1
@@ -251,7 +257,9 @@ async def test_no_grant_means_no_access_and_no_writes(db: DatabaseManager):
     await _two_users(db)
     assert await db.list_allowed_jids_for("default", "her@example.com") == set()
     with pytest.raises(PermissionError):
-        await db.set_chat_access_allowed("default", "her@example.com", "a@g.us", True)
+        await db.set_chat_access_allowed(
+            "default", "her@example.com", "a@g.us", True, acting_email="me@example.com"
+        )
     with pytest.raises(PermissionError):
         await db.upsert_chat_access_tags("default", "her@example.com", "a@g.us", ["x"])
 
@@ -259,10 +267,35 @@ async def test_no_grant_means_no_access_and_no_writes(db: DatabaseManager):
 async def test_revoke_hides_and_drops_viewer_rows(db: DatabaseManager):
     await _two_users(db)
     await db.grant_account("default", "her@example.com")
-    await db.set_chat_access_allowed("default", "her@example.com", "b@g.us", True)
+    await db.set_chat_access_allowed(
+        "default", "her@example.com", "b@g.us", True, acting_email="me@example.com"
+    )
     await db.revoke_account("default", "her@example.com")
     assert await db.list_allowed_jids_for("default", "her@example.com") == set()
     await db.grant_account("default", "her@example.com")  # re-grant starts empty
+    assert await db.list_allowed_jids_for("default", "her@example.com") == set()
+
+
+async def test_revoking_the_owners_own_email_is_a_no_op(db: DatabaseManager):
+    """The owner has no grant row to revoke, and revoking by email must not
+    wipe their own chat_access rows (they're keyed by viewer_email too)."""
+    await _two_users(db)
+    await db.set_chat_access_allowed(
+        "default", "me@example.com", "a@g.us", True, acting_email="me@example.com"
+    )
+    await db.revoke_account("default", "me@example.com")
+    assert await db.list_allowed_jids_for("default", "me@example.com") == {"a@g.us"}
+    assert await db.has_account_access("default", "me@example.com")
+
+
+async def test_only_the_owner_may_set_chat_access_allowed(db: DatabaseManager):
+    await _two_users(db)
+    await db.grant_account("default", "her@example.com")
+    with pytest.raises(PermissionError):
+        await db.set_chat_access_allowed(
+            "default", "her@example.com", "a@g.us", True, acting_email="her@example.com"
+        )
+    # the account's viewer rows are untouched by the refused call
     assert await db.list_allowed_jids_for("default", "her@example.com") == set()
 
 
@@ -295,8 +328,12 @@ async def test_delete_account_removes_grants_and_all_viewers_access(db: Database
     await _two_users(db)
     await db.add_account("hers", "her@example.com", "acct-hers")
     await db.grant_account("hers", "me@example.com")
-    await db.set_chat_access_allowed("hers", "me@example.com", "a@g.us", True)
-    await db.set_chat_access_allowed("hers", "her@example.com", "b@g.us", True)
+    await db.set_chat_access_allowed(
+        "hers", "me@example.com", "a@g.us", True, acting_email="her@example.com"
+    )
+    await db.set_chat_access_allowed(
+        "hers", "her@example.com", "b@g.us", True, acting_email="her@example.com"
+    )
     await db.delete_account("hers")
     assert await db.get_account("hers") is None
     assert await db.list_grants("hers") == []

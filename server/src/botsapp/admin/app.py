@@ -154,9 +154,12 @@ async def _bridge(request: Request) -> WAHAClient:
 def _chat_db(request: Request, viewer: str | None = None) -> ScopedChatDb:
     """Chat allowlist/tags for ``viewer`` (default: the signed-in user) on the
     selected account — the same (account, viewer) an MCP call from that user
-    resolves to."""
+    resolves to. ``actor`` is the signed-in user, who may be editing someone
+    else's visibility (only allowed, at the DatabaseManager layer, when they
+    own the account)."""
     assert state.db is not None
-    return ScopedChatDb(state.db, request.state.account, viewer or request.state.user["email"])
+    me = request.state.user["email"]
+    return ScopedChatDb(state.db, request.state.account, viewer or me, actor=me)
 
 
 @dataclass(frozen=True)
@@ -528,7 +531,7 @@ app = Starlette(
         Route("/access", access_redirect),
         Route("/accounts", accounts.accounts_index),
         Route("/accounts/create", accounts.create_account, methods=["POST"]),
-        Route("/accounts/{account_id}/select", accounts.select_account),
+        Route("/accounts/{account_id}/select", accounts.select_account, methods=["POST"]),
         Route("/accounts/{account_id}/grant", accounts.grant_account, methods=["POST"]),
         Route("/accounts/{account_id}/revoke", accounts.revoke_account, methods=["POST"]),
         Route("/accounts/{account_id}/delete", accounts.delete_account, methods=["POST"]),

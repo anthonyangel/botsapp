@@ -1,10 +1,12 @@
 """BridgeRegistry: account -> its own WAHA session client (0025 phase 2)."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
 import pytest
 
+import botsapp.bridge_registry as bridge_registry_module
 from botsapp.bridge_registry import BridgeRegistry, UnknownAccountError, session_name_for
 from botsapp.db import DatabaseManager
 
@@ -146,15 +148,17 @@ async def test_a_stored_key_is_never_replaced_by_the_admin_key_when_it_cant_be_o
     assert "wk_acct_secret" not in str(excinfo.value)
 
 
-async def test_clients_are_cached_until_the_key_changes(db, box):
+async def test_clients_are_cached_until_the_key_changes(db, box, monkeypatch):
+    monkeypatch.setattr(bridge_registry_module, "_STALE_CLIENT_GRACE_SECONDS", 0)
     await _give_key(db, box)
     registry = BridgeRegistry(db, "http://waha", "ADMIN_KEY", box=box)
     first = await registry.for_account("her", purpose="mcp")
     assert await registry.for_account("her", purpose="mcp") is first
-    first.close = AsyncMock()  # the stale client is closed when the key is rotated
+    first.close = AsyncMock()  # the stale client is closed (after a grace period) on rotation
     await _give_key(db, box, secret="wk_rotated")  # as the admin process would
     second = await registry.for_account("her", purpose="mcp")
     assert second is not first and second._api_key == "wk_rotated"
+    await asyncio.sleep(0.01)  # let the scheduled close-after-grace task run
     first.close.assert_awaited_once()
     await registry.close()
 

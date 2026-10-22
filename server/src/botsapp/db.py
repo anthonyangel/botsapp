@@ -306,8 +306,18 @@ class DatabaseManager:
         await self.connection.commit()
 
     async def revoke_account(self, account_id: str, user_email: str) -> None:
-        """Remove a grant and everything that viewer had been shown."""
+        """Remove a grant and everything that viewer had been shown.
+
+        A no-op for the account's owner: the owner holds access implicitly
+        (see ``has_account_access``), never via a grant, so there is nothing
+        to revoke — and running the delete anyway would wipe the owner's own
+        chat_access rows (their allowlist/tags), since those are keyed by
+        viewer_email like any other viewer's.
+        """
         user = self._normalize_email(user_email)
+        account = await self.get_account(account_id)
+        if account is not None and account["owner_email"] == user:
+            return
         await queries.remove_grant(self.connection, account_id=account_id, user_email=user)
         await queries.remove_viewer_chat_access(
             self.connection, account_id=account_id, user_email=user
@@ -332,9 +342,20 @@ class DatabaseManager:
         return viewer
 
     async def set_chat_access_allowed(
-        self, account_id: str, viewer_email: str, jid: str, is_allowed: bool
+        self, account_id: str, viewer_email: str, jid: str, is_allowed: bool, *, acting_email: str
     ) -> None:
+        """Change what ``viewer_email`` is allowed to see on this account.
+
+        Only the account's owner may call this — otherwise a viewer the
+        account was shared with could simply allow every chat for themself,
+        which the MCP server would then honour. Enforced here, not just by
+        the admin UI's route handler, so no other caller can bypass it.
+        """
         viewer = await self._require_access(account_id, viewer_email)
+        account = await self.get_account(account_id)
+        actor = self._normalize_email(acting_email)
+        if account is None or account["owner_email"] != actor:
+            raise PermissionError(f"{actor} is not the owner of account {account_id}")
         await queries.set_chat_access_allowed(
             self.connection,
             account_id=account_id,

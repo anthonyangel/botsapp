@@ -75,8 +75,8 @@ async def test_unauthenticated_caller_is_refused(real_db, monkeypatch):
 
 async def test_each_viewer_sees_only_their_own_allowlist(real_db, monkeypatch):
     await real_db.grant_account("default", HER)
-    await real_db.set_chat_access_allowed("default", ME, "mine@g.us", True)
-    await real_db.set_chat_access_allowed("default", HER, "shared@g.us", True)
+    await real_db.set_chat_access_allowed("default", ME, "mine@g.us", True, acting_email=ME)
+    await real_db.set_chat_access_allowed("default", HER, "shared@g.us", True, acting_email=ME)
 
     _as(monkeypatch, HER)
     her = await resolve_scope("default")
@@ -95,7 +95,7 @@ async def test_each_viewer_sees_only_their_own_allowlist(real_db, monkeypatch):
 
 async def test_revoked_viewer_loses_the_account_immediately(real_db, monkeypatch):
     await real_db.grant_account("default", HER)
-    await real_db.set_chat_access_allowed("default", HER, "shared@g.us", True)
+    await real_db.set_chat_access_allowed("default", HER, "shared@g.us", True, acting_email=ME)
     _as(monkeypatch, HER)
     held = await resolve_scope("default")
     await real_db.revoke_account("default", HER)

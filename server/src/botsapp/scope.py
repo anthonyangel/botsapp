@@ -50,10 +50,16 @@ class ScopedChatDb:
     grant inside ``DatabaseManager``.
     """
 
-    def __init__(self, db: DatabaseManager, account_id: str, viewer: str) -> None:
+    def __init__(
+        self, db: DatabaseManager, account_id: str, viewer: str, *, actor: str | None = None
+    ) -> None:
         self._db = db
         self.account_id = account_id
         self.viewer = viewer
+        # Who is making the call, when it can differ from `viewer` (the admin
+        # UI editing another viewer's visibility). Defaults to `viewer` for the
+        # MCP path, where a caller only ever acts on their own view.
+        self.actor = actor or viewer
 
     async def list_allowed_jids(self) -> set[str]:
         return await self._db.list_allowed_jids_for(self.account_id, self.viewer)
@@ -68,7 +74,9 @@ class ScopedChatDb:
         await self._db.upsert_chat_access_tags(self.account_id, self.viewer, jid, tags)
 
     async def set_chat_allowed(self, jid: str, is_allowed: bool) -> None:
-        await self._db.set_chat_access_allowed(self.account_id, self.viewer, jid, is_allowed)
+        await self._db.set_chat_access_allowed(
+            self.account_id, self.viewer, jid, is_allowed, acting_email=self.actor
+        )
 
 
 @dataclass(frozen=True)

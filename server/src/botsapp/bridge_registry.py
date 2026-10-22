@@ -28,6 +28,7 @@ viewer holds the account; the registry only maps account -> client.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import TYPE_CHECKING, Literal
@@ -41,6 +42,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 Purpose = Literal["mcp", "admin"]
+
+# How long a stale client (replaced by a key rotation) is kept open after being
+# evicted, so an HTTP call already in flight on it doesn't have its session
+# closed out from under it. Rotations are rare admin actions; a request slower
+# than this grace period would still race, but that's a far smaller window
+# than closing the old client immediately.
+_STALE_CLIENT_GRACE_SECONDS = 30
 
 
 class UnknownAccountError(LookupError):
@@ -90,18 +98,34 @@ class BridgeRegistry:
         # (waha_session, purpose) -> (fingerprint of the key it was built with, client)
         self._clients: dict[tuple[str, str], tuple[str, WAHAClient]] = {}
         self._warned_fallback: set[str] = set()
+        self._clients_lock = asyncio.Lock()
 
     # ── clients ──────────────────────────────────────────────────────────
 
-    async def _client(self, session: str, purpose: str, fingerprint: str, api_key: str):
+    def _cached_client(self, session: str, purpose: str, fingerprint: str) -> WAHAClient | None:
         cached = self._clients.get((session, purpose))
-        if cached is not None and cached[0] == fingerprint:
-            return cached[1]
-        if cached is not None:  # the key changed (rotation): drop the stale client
-            await cached[1].close()
-        client = WAHAClient(self._base_url, api_key, session=session)
-        self._clients[(session, purpose)] = (fingerprint, client)
+        return cached[1] if cached is not None and cached[0] == fingerprint else None
+
+    async def _client(self, session: str, purpose: str, fingerprint: str, api_key: str):
+        async with self._clients_lock:
+            cached = self._clients.get((session, purpose))
+            if cached is not None and cached[0] == fingerprint:
+                return cached[1]
+            stale = cached[1] if cached is not None else None
+            client = WAHAClient(self._base_url, api_key, session=session)
+            self._clients[(session, purpose)] = (fingerprint, client)
+        if stale is not None:  # the key changed (rotation): drop the stale client
+            asyncio.create_task(self._close_after_grace(stale))
         return client
+
+    async def _close_after_grace(self, client: WAHAClient) -> None:
+        """Close a client replaced by rotation, after giving any request that
+        was already holding it a chance to finish."""
+        await asyncio.sleep(_STALE_CLIENT_GRACE_SECONDS)
+        try:
+            await client.close()
+        except Exception:
+            logger.exception("failed to close a stale WAHA client")
 
     def _admin_key(self) -> str:
         if not self._admin_api_key:
@@ -131,6 +155,12 @@ class BridgeRegistry:
                 )
             return await self._client(session, "mcp", "admin-fallback", self._admin_key())
 
+        # The ciphertext (not the secret) identifies the key: it changes on rotation.
+        # Check the cache before decrypting — the common case (same key as last
+        # call) shouldn't pay for a decrypt it doesn't need.
+        cached = self._cached_client(session, "mcp", stored["ciphertext"])
+        if cached is not None:
+            return cached
         if self._box is None:
             raise ScopedKeyUnreadableError(
                 f"account {account_id!r} has a stored key but BOTSAPP_SECRET_KEY is not set"
@@ -141,7 +171,6 @@ class BridgeRegistry:
             raise ScopedKeyUnreadableError(
                 f"account {account_id!r}: the stored key can't be decrypted ({exc})"
             ) from exc
-        # The ciphertext (not the secret) identifies the key: it changes on rotation.
         return await self._client(session, "mcp", stored["ciphertext"], secret)
 
     # ── session lifecycle (admin) ────────────────────────────────────────

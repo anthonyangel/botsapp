@@ -67,9 +67,9 @@ async def _share() -> None:
         await db.add_user(email)
     await db.add_account("sam", SAM, "acct-sam")
     await db.grant_account("sam", HER)
-    await db.set_chat_access_allowed("sam", SAM, SHARED, True)
-    await db.set_chat_access_allowed("sam", SAM, PRIVATE, True)
-    await db.set_chat_access_allowed("sam", HER, SHARED, True)
+    await db.set_chat_access_allowed("sam", SAM, SHARED, True, acting_email=SAM)
+    await db.set_chat_access_allowed("sam", SAM, PRIVATE, True, acting_email=SAM)
+    await db.set_chat_access_allowed("sam", HER, SHARED, True, acting_email=SAM)
 
 
 @pytest.fixture
@@ -133,6 +133,16 @@ async def test_a_viewer_cannot_allow_via_the_viewer_parameter_either(client, sha
     _as(client, HER)
     assert _post(client, f"/chats/{PRIVATE}/allow?viewer={HER}", is_allowed="on").status_code == 403
     assert _post(client, f"/chats/{PRIVATE}/allow?viewer={SAM}", is_allowed="on").status_code == 403
+
+
+async def test_set_chat_access_allowed_itself_refuses_a_non_owner(client, shared):
+    """The owner-only rule must hold even for a caller that bypasses this
+    route entirely and calls the data layer directly — not just because the
+    admin UI's handler happens to check it."""
+    assert state.db is not None
+    with pytest.raises(PermissionError):
+        await state.db.set_chat_access_allowed("sam", PRIVATE, SHARED, True, acting_email=HER)
+    assert await _allowed(HER) == {SHARED}
     assert await _allowed(HER) == {SHARED} and await _allowed(SAM) == {SHARED, PRIVATE}
 
 

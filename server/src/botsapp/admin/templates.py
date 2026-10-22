@@ -178,6 +178,25 @@ _DEFAULT_NAV = NavContext()  # frozen, so safe as a shared default
 nav: ContextVar[NavContext] = ContextVar("admin_nav", default=_DEFAULT_NAV)
 
 
+def _select_account_form(account_id: str, *, label: str, next_url: str | None = None) -> str:
+    """A POST form that selects `account_id`, styled to look like a plain link.
+
+    `/accounts/<id>/select` mutates the botsapp_account cookie, so it must be a
+    POST (AuthMiddleware's CSRF/Origin check only applies to non-GET/HEAD/OPTIONS
+    requests) rather than an `<a href>`/`location.href` navigation.
+    """
+    aid = html.escape(quote(account_id, safe=""), quote=True)
+    action = f"/accounts/{aid}/select"
+    if next_url:
+        action += f"?next={html.escape(quote(next_url, safe=''), quote=True)}"
+    return (
+        f'<form method="post" action="{action}" style="display:inline;">'
+        '<button type="submit" style="background:none;border:none;padding:0;'
+        'color:#1a73e8;text-decoration:underline;cursor:pointer;font:inherit;">'
+        f"{html.escape(label)}</button></form>"
+    )
+
+
 def _nav_html() -> str:
     ctx = nav.get()
     links = []
@@ -198,9 +217,11 @@ def _nav_html() -> str:
             for i, label in ctx.accounts
         )
         switcher = (
-            '<select aria-label="Account" style="margin-right:16px" '
-            "onchange=\"location.href='/accounts/'+encodeURIComponent(this.value)+'/select'\">"
-            f"{options}</select>"
+            '<form method="post" style="display:inline-block;margin-right:16px;">'
+            '<select aria-label="Account" '
+            "onchange=\"this.form.action='/accounts/'+encodeURIComponent(this.value)"
+            "+'/select'; this.form.submit();\">"
+            f"{options}</select></form>"
         )
     return switcher + "".join(links)
 
@@ -1176,11 +1197,13 @@ _CARD_STYLE = "width:100%;max-width:560px;padding:16px 24px;margin-bottom:16px;"
 
 def _grant_row(account_id: str, email: str) -> str:
     aid = html.escape(quote(account_id, safe=""), quote=True)
-    chats_next = html.escape(quote(f"/chats?viewer={quote(email, safe='@')}", safe=""), quote=True)
+    choose_chats = _select_account_form(
+        account_id, label="Choose chats", next_url=f"/chats?viewer={quote(email, safe='@')}"
+    )
     return f"""
       <li style="display:flex;align-items:center;gap:8px;">
         <span>{html.escape(email)}</span>
-        <a href="/accounts/{aid}/select?next={chats_next}">Choose chats</a>
+        {choose_chats}
         <form method="post" action="/accounts/{aid}/revoke"
               onsubmit="return confirm('Revoke access? They stop seeing this account at once.');">
           <input type="hidden" name="email" value="{html.escape(email, quote=True)}">
@@ -1253,7 +1276,7 @@ def _account_card(row: dict[str, Any], current: str) -> str:
       <h5 style="margin:0;">{label}{badge}</h5>
       <p class="tab-note">id <code>{html.escape(row["id"])}</code> · owner
         {html.escape(row["owner"])} · WhatsApp: <b>{html.escape(row["status"])}</b></p>
-      <p><a href="/accounts/{aid}/select">Use this account</a></p>
+      <p>{_select_account_form(row["id"], label="Use this account")}</p>
       {key_block}
       <b>Shared with</b>
       {grants}
@@ -1305,8 +1328,7 @@ def accounts_page(
     shared_list = ""
     if shared:
         items = "".join(
-            f'<li><a href="/accounts/{html.escape(quote(i, safe=""), quote=True)}/select">'
-            f"{html.escape(label)}</a> — shared by {html.escape(owner)}</li>"
+            f"<li>{_select_account_form(i, label=label)} — shared by {html.escape(owner)}</li>"
             for i, label, owner in shared
         )
         shared_list = f"<h5>Shared with you</h5><ul>{items}</ul>"

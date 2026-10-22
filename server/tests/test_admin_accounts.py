@@ -155,7 +155,7 @@ async def test_create_rechecks_the_admin_role_live(client, people):
 async def test_delete_removes_session_then_everything_about_the_account(client, people):
     await state.db.add_account("sam", SAM, "acct-sam")
     await state.db.grant_account("sam", HER)
-    await state.db.set_chat_access_allowed("sam", HER, "a@g.us", True)
+    await state.db.set_chat_access_allowed("sam", HER, "a@g.us", True, acting_email=SAM)
     _as(client, ADMIN)
     r = _post(client, "/accounts/sam/delete")
     assert "notice" in _flash(r)
@@ -200,7 +200,7 @@ async def test_owner_shares_and_unshares_their_account(client, people):
     _as(client, SAM)
     assert "notice" in _flash(_post(client, "/accounts/sam/grant", email=HER))
     assert await state.db.has_account_access("sam", HER)
-    await state.db.set_chat_access_allowed("sam", HER, "a@g.us", True)
+    await state.db.set_chat_access_allowed("sam", HER, "a@g.us", True, acting_email=SAM)
     assert "notice" in _flash(_post(client, "/accounts/sam/revoke", email=HER))
     assert not await state.db.has_account_access("sam", HER)
     assert await state.db.list_allowed_jids_for("sam", HER) == set()
@@ -292,7 +292,10 @@ async def test_select_sets_a_validated_cookie_and_drives_the_pages(client, peopl
     _as(client, HER)
     client.get("/session/status.json")
     assert seen[-1] == "her"  # owned beats the shared default
-    r = client.get("/accounts/her2/select", headers={"referer": f"{BASE}/session/status.json"})
+    r = client.post(
+        "/accounts/her2/select",
+        headers={"origin": BASE, "referer": f"{BASE}/session/status.json"},
+    )
     assert r.status_code == 303 and r.headers["location"] == "/session/status.json"
     assert "HttpOnly" in r.headers["set-cookie"]
     client.get("/session/status.json")
@@ -302,9 +305,23 @@ async def test_select_sets_a_validated_cookie_and_drives_the_pages(client, peopl
 async def test_cannot_select_an_account_you_do_not_hold(client, people):
     await state.db.add_account("sam", SAM, "acct-sam")
     _as(client, HER)
-    r = client.get("/accounts/sam/select")
+    r = client.post("/accounts/sam/select", headers={"origin": BASE})
     assert "Unknown account" in _flash(r)["error"][0]
     assert auth.ACCOUNT_COOKIE not in r.headers.get("set-cookie", "")
+
+
+async def test_select_requires_post_and_a_matching_origin(client, people):
+    """GET must be refused (405): a state-changing navigation is exactly what
+    AuthMiddleware's CSRF/Origin check is meant to block, and it only runs for
+    non-GET/HEAD/OPTIONS requests."""
+    await state.db.add_account("her", HER, "acct-her")
+    _as(client, HER)
+    assert client.get("/accounts/her/select").status_code == 405
+    wrong_origin = client.post("/accounts/her/select", headers={"origin": "https://evil.test"})
+    assert wrong_origin.status_code == 403
+    r = client.post("/accounts/her/select", headers={"origin": BASE})
+    assert r.status_code == 303
+    assert "HttpOnly" in r.headers["set-cookie"]
 
 
 async def test_a_forged_cookie_for_someone_elses_account_is_ignored(client, people, monkeypatch):
