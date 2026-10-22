@@ -1451,3 +1451,43 @@ async def test_choose_group_errors_clearly_on_a_handshake_era_connection(
     async with Client(server, mode="legacy") as client:
         with pytest.raises(Exception, match="2026-07-28"):
             await client.call_tool("choose_group", {"query": "family"})
+
+
+async def test_choose_group_treats_an_empty_response_map_as_the_first_round(
+    mock_bridge: AsyncMock,
+):
+    # A client may send an empty input_responses map on its first call. That is not an
+    # answer: ask the question rather than returning "cancelled" without ever asking.
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    result = await choose_group(query="family", ctx=_ctx({}))
+    assert isinstance(result, InputRequiredResult)
+
+
+async def test_choose_group_ignores_responses_that_are_not_for_its_question(
+    mock_bridge: AsyncMock,
+):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    foreign = {"something_else": SimpleNamespace(action="accept", content={"x": "y"})}
+    result = await choose_group(query="family", ctx=_ctx(foreign))
+    assert isinstance(result, InputRequiredResult)
+
+
+async def test_choose_group_reports_what_the_client_actually_replied(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    for action in ("decline", "cancel"):
+        result = _choice(await choose_group(query="family", ctx=_ctx(_answer(None, action=action))))
+        assert result.status == "cancelled"
+        assert result.message is not None and repr(action) in result.message
+    accepted_empty = {"group": SimpleNamespace(action="accept", content=None)}
+    result = _choice(await choose_group(query="family", ctx=_ctx(accepted_empty)))
+    assert result.status == "cancelled"
+    assert result.message is not None and "no choice" in result.message
