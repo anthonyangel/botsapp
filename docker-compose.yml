@@ -11,25 +11,17 @@ x-bridge-env: &bridge-env
 
 services:
   waha:
-    # WHATSAPP_DEFAULT_ENGINE=WEBJS is deliberate: WAHA's other engines
-    # (NOWEB/GOWS) are protocol reimplementations and hit the same class of
-    # upstream WhatsApp protocol breakage (companion_reg_refresh). WEBJS
-    # drives real Chromium against the actual WhatsApp Web site instead,
-    # sidestepping that specific class of bug.
-    #
-    # WAHA_IMAGE: the plain `latest`/`chrome` tag has no arm64 build as of
-    # this writing — Apple Silicon hosts need an `-arm` tagged image.
-    # Specifically `dev-arm`, not the stable `arm` tag: `arm` (2026.8.2, as
-    # of this writing) hits a real bug — "Cmd.refreshQR is not a function"
-    # inside WAHA's own headless Chromium page, breaking QR pairing outright
-    # — while `dev-arm` (2026.9.1) does not; pairing was verified working on
-    # `dev-arm` directly. Re-check whether a newer stable tag has picked up
-    # the fix before moving off `dev-arm`. Override
-    # to a non-`-arm` tag for typical x86_64 deployment hosts.
-    image: ${WAHA_IMAGE:-devlikeapro/waha:dev-arm}
-    shm_size: "2gb"  # headless Chromium needs real /dev/shm or it crashes
+    # NOWEB engine, same as Fly (docs/decisions/0023), so local and production
+    # behave alike. `noweb-arm-<version>` is the arm64 (Apple Silicon) build of the
+    # NOWEB-only image: no Chromium, so no shm_size needed. Override WAHA_IMAGE with
+    # `devlikeapro/waha:noweb-<version>` on x86_64 hosts. Version-pinned on purpose
+    # (not `dev-arm`); Renovate bumps it. Switching an existing local volume from the
+    # old WEBJS setup needs the old `default` session deleted and the QR re-scanned.
+    image: ${WAHA_IMAGE:-devlikeapro/waha:noweb-arm-2026.9.2}
     environment:
-      WHATSAPP_DEFAULT_ENGINE: WEBJS
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+      # Tracks WhatsApp's current web version automatically (same as waha/fly.toml).
+      WAHA_NOWEB_WA_VERSION: auto-web
       WAHA_API_KEY: ${WAHA_API_KEY}
       # Local-file media storage (WAHA's own default). The actual WAHA
       # default is a 180-second lifetime, which silently deletes received

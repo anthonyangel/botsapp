@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0022.
+been kept in date order, current through 0023.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -32,7 +32,7 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
 
 | Service | What | Reachable from |
 |---|---|---|
-| `waha` | WhatsApp bridge (`devlikeapro/waha:dev-arm` — arm64 needs the `dev-arm` tag, not `arm`, see [0006 note in 0007](docs/decisions/0007-sqlite-for-metadata-store.md)) | private only, always |
+| `waha` | WhatsApp bridge, NOWEB engine (`devlikeapro/waha:noweb-<version>` on Fly, `noweb-arm-<version>` locally — version-pinned, never `dev`; see [0023](docs/decisions/0023-waha-noweb-version-pinned-images.md)) | private only, always |
 | `mcp-server` | The MCP endpoint (`botsapp.main:app`, port 8000) — the *only* thing meant to be public | public, gated by WorkOS AuthKit login |
 | `admin-ui` | QR login + chat allowlist/tags (`botsapp.admin_main:app`, port 8100) — same image as `mcp-server`, different `command:` | private only, always — **no login of its own** |
 
