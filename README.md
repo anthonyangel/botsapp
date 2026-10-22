@@ -108,8 +108,10 @@ uv run ty check
 images, and GitHub Actions, and tracks everything on the **Dependency Dashboard**
 issue. Config: `.github/renovate.json5`; runner: `.github/workflows/renovate.yml`
 (daily, plus on demand via *Run workflow* or by ticking a dashboard checkbox).
-It needs a `RENOVATE_TOKEN` repo secret — see
-[decision 0020](docs/decisions/0020-renovate-dependency-management.md). WAHA, the
+A `RENOVATE_TOKEN` repo secret (PAT/App) is preferred; without one it runs on
+`GITHUB_TOKEN` in a reduced mode — see
+[0020](docs/decisions/0020-renovate-dependency-management.md) and
+[0021](docs/decisions/0021-renovate-token-fallback.md). WAHA, the
 MCP stack and the Python version wait for a dashboard tick before a PR opens.
 
 ## Never expose `admin-ui` or `waha` publicly

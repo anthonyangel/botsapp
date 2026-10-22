@@ -22,6 +22,17 @@
   prHourlyLimit: 4,
   rebaseWhen: "conflicted",
 
+  // Renovate exits non-zero only for error-level log entries, and its failures to
+  // write (dashboard issue, branches, PRs) are logged as warnings — so a run that
+  // couldn't change anything exits 0. Promote those to errors so the CI job fails.
+  // See docs/decisions/0021-renovate-token-fallback.md.
+  logLevelRemap: [
+    {
+      matchMessage: "/^(Could not ensure issue|Error updating branch|Error updating PR|Error ensuring comment)/",
+      newLogLevel: "error",
+    },
+  ],
+
   // Advisories from OSV (covers PyPI) as well as GitHub's own.
   vulnerabilityAlerts: { enabled: true, labels: ["dependencies", "security"], schedule: ["at any time"] },
   osvVulnerabilityAlerts: true,
