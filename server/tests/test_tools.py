@@ -48,23 +48,39 @@ from botsapp.tools import (
     update_group_participants,
 )
 
+
+def _dump(result):
+    """Plain-dict view of a tool's pydantic result (aliases as serialized)."""
+    if isinstance(result, list):
+        return [_dump(r) for r in result]
+    return result.model_dump(by_alias=True)
+
+
 # ── Read tools ────────────────────────────────────────────────────────────────
 
 
 async def test_list_chats_delegates_to_message_store(mock_message_store: AsyncMock):
-    mock_message_store.get_chats.return_value = [{"id": "1", "name": "Alice"}]
-    result = await list_chats(limit=10)
+    mock_message_store.get_chats.return_value = [{"jid": "1@g.us", "name": "Alice"}]
+    result = _dump(await list_chats(limit=10))
     mock_message_store.get_chats.assert_awaited_once_with(limit=11, offset=0)
-    assert result == {"items": [{"id": "1", "name": "Alice"}], "next_offset": None}
+    assert result == {
+        "items": [
+            {"jid": "1@g.us", "name": "Alice", "last_message": None, "last_message_at": None}
+        ],
+        "next_offset": None,
+    }
 
 
 async def test_list_chats_reports_next_offset_when_more_results_exist(
     mock_message_store: AsyncMock,
 ):
     # The tool fetches limit+1 rows; the extra one only signals "more exist".
-    mock_message_store.get_chats.return_value = [{"id": "1"}, {"id": "2"}, {"id": "3"}]
-    result = await list_chats(limit=2, offset=4)
-    assert result == {"items": [{"id": "1"}, {"id": "2"}], "next_offset": 6}
+    mock_message_store.get_chats.return_value = [
+        {"jid": f"{i}@g.us", "name": str(i)} for i in range(3)
+    ]
+    result = _dump(await list_chats(limit=2, offset=4))
+    assert [c["jid"] for c in result["items"]] == ["0@g.us", "1@g.us"]
+    assert result["next_offset"] == 6
 
 
 async def test_list_chats_default_limit(mock_message_store: AsyncMock):
@@ -94,37 +110,34 @@ async def test_list_chats_raises_tool_error_without_leaking_internals(
 
 async def test_list_chats_by_query_uses_search_chats(mock_message_store: AsyncMock):
     mock_message_store.search_chats.return_value = [{"jid": "a@g.us", "name": "Alice"}]
-    result = await list_chats(query="Alice")
+    result = _dump(await list_chats(query="Alice"))
     mock_message_store.search_chats.assert_awaited_once_with(query="Alice", limit=51, offset=0)
-    assert result == {"items": [{"jid": "a@g.us", "name": "Alice"}], "next_offset": None}
+    assert [c["jid"] for c in result["items"]] == ["a@g.us"]
+    assert result["next_offset"] is None
 
 
 async def test_list_chats_by_tags_uses_db_search_by_tags(
     mock_db: AsyncMock, mock_message_store: AsyncMock
 ):
     # search_by_tags only locates matching jids — the full chat record
-    # (matching every other branch's documented shape: id, jid, name,
-    # unread_count, last_message, last_message_at) comes from
+    # (matching every other branch's documented shape: jid, name,
+    # last_message, last_message_at) comes from
     # message_store.get_chat, same as the query/default branches.
     mock_db.search_by_tags.return_value = [{"jid": "a@g.us", "tags": ["vip"]}]
     mock_message_store.get_chat.return_value = {
-        "id": "1",
         "jid": "a@g.us",
         "name": "Alice",
-        "unread_count": 0,
         "last_message": "hi",
         "last_message_at": "2026-01-01T00:00:00Z",
     }
-    result = await list_chats(tags=["vip"])
+    result = _dump(await list_chats(tags=["vip"]))
     mock_db.search_by_tags.assert_awaited_once_with(tags=["vip"])
     mock_message_store.get_chat.assert_awaited_once_with("a@g.us")
     assert result == {
         "items": [
             {
-                "id": "1",
                 "jid": "a@g.us",
                 "name": "Alice",
-                "unread_count": 0,
                 "last_message": "hi",
                 "last_message_at": "2026-01-01T00:00:00Z",
             }
@@ -143,10 +156,14 @@ async def test_list_chats_by_tags_paginates_after_dropping_unresolved_matches(
         {"jid": "a@g.us"},
         {"jid": "b@g.us"},
     ]
-    chats = {"a@g.us": {"jid": "a@g.us"}, "b@g.us": {"jid": "b@g.us"}}
+    chats = {
+        "a@g.us": {"jid": "a@g.us", "name": "A"},
+        "b@g.us": {"jid": "b@g.us", "name": "B"},
+    }
     mock_message_store.get_chat.side_effect = lambda jid: chats.get(jid)
-    result = await list_chats(tags=["vip"], limit=1)
-    assert result == {"items": [{"jid": "a@g.us"}], "next_offset": 1}
+    result = _dump(await list_chats(tags=["vip"], limit=1))
+    assert [c["jid"] for c in result["items"]] == ["a@g.us"]
+    assert result["next_offset"] == 1
 
 
 async def test_list_chats_by_tags_skips_matches_with_no_chat_record(
@@ -154,7 +171,7 @@ async def test_list_chats_by_tags_skips_matches_with_no_chat_record(
 ):
     mock_db.search_by_tags.return_value = [{"jid": "a@g.us", "tags": ["vip"]}]
     mock_message_store.get_chat.return_value = None
-    result = await list_chats(tags=["vip"])
+    result = _dump(await list_chats(tags=["vip"]))
     assert result == {"items": [], "next_offset": None}
 
 
@@ -245,7 +262,7 @@ def _group(
 
 async def test_list_groups_delegates_to_bridge(mock_bridge: AsyncMock):
     mock_bridge.list_groups.return_value = [_group()]
-    result = await list_groups()
+    result = _dump(await list_groups())
     mock_bridge.list_groups.assert_awaited_once()
     assert result[0]["jid"] == "g1@g.us"
     assert result[0]["name"] == "Test"
@@ -261,7 +278,7 @@ async def test_list_groups_excludes_chats_not_in_allowlist(
         _group(jid="g1@g.us", name="Allowed"),
         _group(jid="g2@g.us", name="Not allowed"),
     ]
-    result = await list_groups()
+    result = _dump(await list_groups())
     assert [g["jid"] for g in result] == ["g1@g.us"]
 
 
@@ -270,7 +287,7 @@ async def test_list_groups_excludes_communities_by_default(mock_bridge: AsyncMoc
         _group(jid="g1@g.us", name="Community", is_community=True),
         _group(jid="g2@g.us", name="Regular", is_community=False),
     ]
-    result = await list_groups()
+    result = _dump(await list_groups())
     assert len(result) == 1
     assert result[0]["name"] == "Regular"
 
@@ -280,7 +297,7 @@ async def test_list_groups_include_communities(mock_bridge: AsyncMock):
         _group(jid="g1@g.us", name="Community", is_community=True),
         _group(jid="g2@g.us", name="Regular", is_community=False),
     ]
-    result = await list_groups(exclude_communities=False)
+    result = _dump(await list_groups(exclude_communities=False))
     assert len(result) == 2
     assert result[0]["is_community"] is True
 
@@ -297,7 +314,7 @@ async def test_list_groups_filters_by_tags(mock_bridge: AsyncMock, mock_db: Asyn
         _group(jid="g2@g.us", name="Unrelated Group"),
     ]
     mock_db.search_by_tags.return_value = [{"jid": "g1@g.us", "tags": ["Gan"], "name": "g1@g.us"}]
-    result = await list_groups(tags=["Gan"])
+    result = _dump(await list_groups(tags=["Gan"]))
     mock_db.search_by_tags.assert_awaited_once_with(tags=["Gan"])
     assert [g["jid"] for g in result] == ["g1@g.us"]
 
@@ -314,14 +331,14 @@ async def test_list_groups_tags_and_query_combine_with_and(
         {"jid": "g1@g.us", "tags": ["Gan"], "name": "g1@g.us"},
         {"jid": "g2@g.us", "tags": ["Gan"], "name": "g2@g.us"},
     ]
-    result = await list_groups(tags=["Gan"], query="parents")
+    result = _dump(await list_groups(tags=["Gan"], query="parents"))
     assert [g["jid"] for g in result] == ["g1@g.us"]
 
 
 async def test_list_groups_tags_no_match_returns_empty(mock_bridge: AsyncMock, mock_db: AsyncMock):
     mock_bridge.list_groups.return_value = [_group(jid="g1@g.us", name="Something Else")]
     mock_db.search_by_tags.return_value = []
-    result = await list_groups(tags=["nonexistent"])
+    result = _dump(await list_groups(tags=["nonexistent"]))
     assert result == []
 
 
@@ -361,7 +378,7 @@ async def test_list_groups_never_leaks_participants_or_invite_link(mock_bridge: 
             invite_link="https://chat.whatsapp.com/SuperSecretInviteCode",
         )
     ]
-    result = await list_groups()
+    result = _dump(await list_groups())
     assert "participants" not in result[0]
     assert "invite_link" not in result[0]
     assert result[0].keys() == _DOCUMENTED_LIST_GROUPS_FIELDS
@@ -372,7 +389,7 @@ async def test_list_groups_result_keys_match_documented_contract(mock_bridge: As
     # be a deliberate, reviewed change to both list_groups and this set —
     # not a silent pass-through.
     mock_bridge.list_groups.return_value = [_group()]
-    result = await list_groups()
+    result = _dump(await list_groups())
     assert result[0].keys() == _DOCUMENTED_LIST_GROUPS_FIELDS
 
 
@@ -399,7 +416,7 @@ async def test_list_groups_output_size_bounded_with_many_large_groups(mock_bridg
         )
     )
     mock_bridge.list_groups.return_value = groups
-    result = await list_groups()
+    result = _dump(await list_groups())
     # 30 groups of ~six short fields each is a few KB at most; the old
     # asdict()-based version would have serialized well over 100K chars
     # for this exact shape (2000+50*29 member JIDs).
@@ -414,7 +431,7 @@ async def test_list_communities_returns_only_communities(mock_bridge: AsyncMock)
         _group(jid="g1@g.us", name="Community", is_community=True),
         _group(jid="g2@g.us", name="Regular", is_community=False),
     ]
-    result = await list_communities()
+    result = _dump(await list_communities())
     assert [c["jid"] for c in result] == ["g1@g.us"]
     assert result[0]["name"] == "Community"
 
@@ -427,7 +444,7 @@ async def test_list_communities_excludes_chats_not_in_allowlist(
         _group(jid="g1@g.us", name="Allowed", is_community=True),
         _group(jid="g2@g.us", name="Not allowed", is_community=True),
     ]
-    result = await list_communities()
+    result = _dump(await list_communities())
     assert [c["jid"] for c in result] == ["g1@g.us"]
 
 
@@ -439,7 +456,7 @@ async def test_list_communities_filters_by_query_and_tags(
         _group(jid="g2@g.us", name="Other Community", is_community=True),
     ]
     mock_db.search_by_tags.return_value = [{"jid": "g1@g.us", "tags": ["shul"], "name": "g1@g.us"}]
-    result = await list_communities(query="yeshurun", tags=["shul"])
+    result = _dump(await list_communities(query="yeshurun", tags=["shul"]))
     assert [c["jid"] for c in result] == ["g1@g.us"]
 
 
@@ -466,7 +483,7 @@ async def test_list_communities_never_leaks_participant_count_or_invite_link(
             invite_link="https://chat.whatsapp.com/SuperSecretInviteCode",
         )
     ]
-    result = await list_communities()
+    result = _dump(await list_communities())
     assert result[0].keys() == _DOCUMENTED_LIST_COMMUNITIES_FIELDS
 
 
@@ -478,7 +495,7 @@ async def test_get_group_info_delegates_to_bridge(mock_bridge: AsyncMock):
         participants=["972501@s.whatsapp.net"],
         linked_parent_jid="parent@g.us",
     )
-    result = await get_group_info(jid="g1@g.us")
+    result = _dump(await get_group_info(jid="g1@g.us"))
     mock_bridge.get_group_info.assert_awaited_once_with("g1@g.us")
     assert result["participants"] == ["972501@s.whatsapp.net"]
     assert result["participant_count"] == 1
@@ -493,7 +510,7 @@ async def test_get_group_info_includes_invite_link(mock_bridge: AsyncMock):
     mock_bridge.get_group_info.return_value = _group(
         jid="g1@g.us", invite_link="https://chat.whatsapp.com/abc123"
     )
-    result = await get_group_info(jid="g1@g.us")
+    result = _dump(await get_group_info(jid="g1@g.us"))
     assert result["invite_link"] == "https://chat.whatsapp.com/abc123"
 
 
@@ -527,12 +544,24 @@ async def test_mark_read_delegates_to_bridge(mock_bridge: AsyncMock):
 
 
 async def test_search_messages_delegates_to_message_store(mock_message_store: AsyncMock):
-    mock_message_store.search_messages.return_value = [{"message_id": "m1", "text": "hello"}]
-    result = await search_messages(query="hello", jid="123@s.whatsapp.net", limit=10)
+    mock_message_store.search_messages.return_value = [
+        {
+            "message_id": "m1",
+            "from": "123@s.whatsapp.net",
+            "sender_name": "Alice",
+            "chat_jid": "123@s.whatsapp.net",
+            "chat_name": "Alice",
+            "text": "hello",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "message_type": "text",
+        }
+    ]
+    result = _dump(await search_messages(query="hello", jid="123@s.whatsapp.net", limit=10))
     mock_message_store.search_messages.assert_awaited_once_with(
         query="hello", jid="123@s.whatsapp.net", limit=11, offset=0
     )
     assert result["items"][0]["text"] == "hello"
+    assert result["items"][0]["from"] == "123@s.whatsapp.net"  # serialized by alias
     assert result["next_offset"] is None
 
 
@@ -571,7 +600,7 @@ async def test_search_messages_not_allowed_returns_error(mock_message_store: Asy
 
 async def test_add_tag_merges_into_existing_tags(mock_db: AsyncMock):
     mock_db.get_chat_metadata.return_value = {"jid": "123@s.whatsapp.net", "tags": ["vip"]}
-    result = await add_tag(jid="123@s.whatsapp.net", tag="lead")
+    result = _dump(await add_tag(jid="123@s.whatsapp.net", tag="lead"))
     mock_db.upsert_chat_metadata.assert_awaited_once_with(
         jid="123@s.whatsapp.net", tags=["vip", "lead"]
     )
@@ -581,14 +610,14 @@ async def test_add_tag_merges_into_existing_tags(mock_db: AsyncMock):
 
 async def test_add_tag_no_existing_metadata(mock_db: AsyncMock):
     mock_db.get_chat_metadata.return_value = None
-    result = await add_tag(jid="123@s.whatsapp.net", tag="lead")
+    result = _dump(await add_tag(jid="123@s.whatsapp.net", tag="lead"))
     mock_db.upsert_chat_metadata.assert_awaited_once_with(jid="123@s.whatsapp.net", tags=["lead"])
     assert result["tags"] == ["lead"]
 
 
 async def test_add_tag_is_idempotent(mock_db: AsyncMock):
     mock_db.get_chat_metadata.return_value = {"jid": "123@s.whatsapp.net", "tags": ["vip"]}
-    result = await add_tag(jid="123@s.whatsapp.net", tag="vip")
+    result = _dump(await add_tag(jid="123@s.whatsapp.net", tag="vip"))
     mock_db.upsert_chat_metadata.assert_awaited_once_with(jid="123@s.whatsapp.net", tags=["vip"])
     assert result["tags"] == ["vip"]
 
@@ -611,21 +640,21 @@ async def test_remove_tag_drops_only_that_tag(mock_db: AsyncMock):
         "jid": "123@s.whatsapp.net",
         "tags": ["vip", "lead"],
     }
-    result = await remove_tag(jid="123@s.whatsapp.net", tag="lead")
+    result = _dump(await remove_tag(jid="123@s.whatsapp.net", tag="lead"))
     mock_db.upsert_chat_metadata.assert_awaited_once_with(jid="123@s.whatsapp.net", tags=["vip"])
     assert result["tags"] == ["vip"]
 
 
 async def test_remove_tag_missing_tag_is_noop(mock_db: AsyncMock):
     mock_db.get_chat_metadata.return_value = {"jid": "123@s.whatsapp.net", "tags": ["vip"]}
-    result = await remove_tag(jid="123@s.whatsapp.net", tag="nonexistent")
+    result = _dump(await remove_tag(jid="123@s.whatsapp.net", tag="nonexistent"))
     mock_db.upsert_chat_metadata.assert_awaited_once_with(jid="123@s.whatsapp.net", tags=["vip"])
     assert result["tags"] == ["vip"]
 
 
 async def test_remove_tag_no_existing_metadata(mock_db: AsyncMock):
     mock_db.get_chat_metadata.return_value = None
-    result = await remove_tag(jid="123@s.whatsapp.net", tag="vip")
+    result = _dump(await remove_tag(jid="123@s.whatsapp.net", tag="vip"))
     mock_db.upsert_chat_metadata.assert_awaited_once_with(jid="123@s.whatsapp.net", tags=[])
     assert result["tags"] == []
 
@@ -644,7 +673,7 @@ async def test_remove_tag_not_allowed_returns_error(mock_db: AsyncMock):
 
 
 async def test_clear_tags_saves_empty_list(mock_db: AsyncMock):
-    result = await clear_tags(jid="123@s.whatsapp.net")
+    result = _dump(await clear_tags(jid="123@s.whatsapp.net"))
     mock_db.upsert_chat_metadata.assert_awaited_once_with(jid="123@s.whatsapp.net", tags=[])
     assert result["tags"] == []
     assert result["status"] == "saved"
@@ -669,13 +698,13 @@ async def test_get_chat_metadata_found(mock_db: AsyncMock):
         "tags": ["vip"],
         "updated_at": "2024-01-01",
     }
-    result = await get_chat_metadata(jid="123@s.whatsapp.net")
+    result = _dump(await get_chat_metadata(jid="123@s.whatsapp.net"))
     assert result["tags"] == ["vip"]
 
 
 async def test_get_chat_metadata_not_found(mock_db: AsyncMock):
     mock_db.get_chat_metadata.return_value = None
-    result = await get_chat_metadata(jid="missing@s.whatsapp.net")
+    result = _dump(await get_chat_metadata(jid="missing@s.whatsapp.net"))
     assert result["tags"] == []
     assert result["status"] == "no metadata"
 
@@ -1233,3 +1262,13 @@ async def test_reachable_tools_advertise_annotations_and_output_schema():
         assert tools[name].annotations.idempotentHint is True, name
     for name in read_only - {"get_media"}:
         assert tools[name].output_schema, name
+
+
+async def test_message_page_output_schema_uses_from_alias():
+    from botsapp.app import mcp
+
+    tools = {t.name: t for t in await mcp.list_tools(run_middleware=False)}
+    schema = tools["list_messages"].output_schema
+    assert schema is not None
+    message = schema["$defs"]["Message"]["properties"]
+    assert "from" in message and "from_" not in message
