@@ -317,6 +317,26 @@ class WAHAClient:
             pass
         await self._post("/api/sessions", self._new_session_payload(start=False))
 
+    # ── API keys (admin key only; docs/decisions/0027) ───────────────────
+
+    async def create_key(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._post("/api/keys", body)
+
+    async def list_keys(self) -> list[dict[str, Any]]:
+        data = await self._get("/api/keys")
+        return data if isinstance(data, list) else data.get("data", [])
+
+    async def update_key(self, key_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._put(f"/api/keys/{key_id}", body)
+
+    async def delete_key(self, key_id: str) -> None:
+        """Delete a key; one that is already gone is not an error."""
+        try:
+            await self._request("DELETE", f"/api/keys/{key_id}")
+        except RuntimeError as exc:
+            if "→ 404" not in str(exc):
+                raise
+
     async def delete_session(self) -> None:
         """Delete this session and its persisted auth material; a session that
         is already gone is not an error."""

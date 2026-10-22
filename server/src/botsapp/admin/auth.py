@@ -16,7 +16,7 @@ and have not yet been exercised against a live environment.
 Route policy (``_policy``):
 
 * ``/users`` (and legacy ``/access``)           — admins only
-* ``/accounts/create``, ``/accounts/*/delete`` — admins only
+* ``/accounts/create``, ``/accounts/*/delete``, ``/accounts/*/key/*`` — admins only
 * ``/accounts*`` (list, grant, revoke, select) — any user; handlers check that
   the account in the path is theirs (owner) or that they are an admin
 * ``/`` and ``/session/*``         — the selected account's owner, or an admin
@@ -262,6 +262,8 @@ def _policy(path: str) -> str:
     if path.startswith(("/users", "/access")):
         return "admin"
     if path == "/accounts/create" or (path.startswith("/accounts/") and path.endswith("/delete")):
+        return "admin"
+    if path.startswith("/accounts/") and "/key/" in path:
         return "admin"
     if path.startswith("/accounts"):
         return "user"  # the handlers check ownership of the account in the path

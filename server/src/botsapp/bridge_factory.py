@@ -16,6 +16,7 @@ from botsapp.bridge import Bridge
 from botsapp.bridge_registry import BridgeRegistry
 from botsapp.db import DatabaseManager
 from botsapp.message_store import MessageStore
+from botsapp.secretbox import SecretBox
 from botsapp.waha_client import WAHAClient
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,19 @@ def bridge_provider_name() -> str:
     return "waha"
 
 
-def build_registry(db: DatabaseManager) -> BridgeRegistry:
-    """Per-account bridges (0025). Alongside, not instead of,
-    ``build_bridge_and_store``: tools move over to it in phase 3."""
-    return BridgeRegistry(db, os.environ["WAHA_URL"], os.environ["WAHA_API_KEY"])
+def scoped_keys_required() -> bool:
+    """WAHA_REQUIRE_SCOPED_KEYS: the MCP side refuses to use the shared admin key
+    for an account that has no scoped key (docs/decisions/0027)."""
+    return os.environ.get("WAHA_REQUIRE_SCOPED_KEYS", "").strip().lower() in ("1", "true", "yes")
+
+
+def build_registry(db: DatabaseManager, box: SecretBox | None = None) -> BridgeRegistry:
+    """Per-account bridges (0025, 0027). The admin key is optional here: the MCP
+    process in strict mode has it stripped from its environment."""
+    return BridgeRegistry(
+        db,
+        os.environ["WAHA_URL"],
+        os.environ.get("WAHA_API_KEY") or None,
+        box=box,
+        require_scoped_keys=scoped_keys_required(),
+    )

@@ -18,8 +18,14 @@ from fastmcp.server.middleware import AuthMiddleware
 from mcp.types import Icon
 
 import botsapp.state as state
-from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store, build_registry
+from botsapp.bridge_factory import (
+    bridge_provider_name,
+    build_bridge_and_store,
+    build_registry,
+    scoped_keys_required,
+)
 from botsapp.db import DatabaseManager
+from botsapp.secretbox import SecretBox
 
 logger = logging.getLogger(__name__)
 
@@ -93,17 +99,30 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
         # (idempotent) — docs/decisions/0025.
         await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
 
-    # state.bridge is the default-session bridge, used only by the
-    # permanently blocked outbound tools. Everything reachable resolves a
-    # per-account, per-viewer view through state.registry (scope.py).
-    bridge, _ = build_bridge_and_store()
-    state.bridge = bridge
-    state.registry = build_registry(state.db)
+    box = SecretBox.from_env()  # raises if BOTSAPP_SECRET_KEY is malformed
+    if scoped_keys_required() and box is None:
+        raise RuntimeError(
+            "WAHA_REQUIRE_SCOPED_KEYS needs BOTSAPP_SECRET_KEY to open the stored keys"
+        )
+
+    # state.bridge is the default-session bridge on the admin key, used only by
+    # the permanently blocked outbound tools. It is skipped when the admin key
+    # has been withheld from this process (strict mode); everything reachable
+    # resolves a per-account, per-viewer view through state.registry (scope.py),
+    # on that account's own scoped key.
+    if os.environ.get("WAHA_API_KEY"):
+        bridge, _ = build_bridge_and_store()
+        state.bridge = bridge
+    state.registry = build_registry(state.db, box)
+    unkeyed = [a["id"] for a in await state.db.list_accounts() if not a["waha_key_id"]]
+    if unkeyed:
+        logger.warning("accounts without a scoped WAHA key: %s", ", ".join(unkeyed))
     logger.info("Bridge ready (%s)", bridge_provider_name())
 
     yield
 
-    await state.bridge.close()
+    if state.bridge is not None:
+        await state.bridge.close()
     await state.registry.close()
     await state.db.close()
     state.db = None

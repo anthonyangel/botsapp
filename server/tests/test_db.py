@@ -305,3 +305,83 @@ async def test_delete_account_removes_grants_and_all_viewers_access(db: Database
     assert row is not None and row[0] == 0
     assert await db.get_account("default") is not None  # other accounts untouched
     assert await db.get_user("her@example.com") is not None
+
+
+# ── scoped WAHA key columns (0027) ───────────────────────────────────────────
+
+
+async def test_account_key_round_trip_and_clear(db: DatabaseManager):
+    await _two_users(db)
+    await db.add_account("hers", "her@example.com", "acct-hers")
+    assert await db.get_account_key("hers") is None
+    await db.set_account_key("hers", "key_1", "CIPHERTEXT", {"read": True, "send": False})
+    assert await db.get_account_key("hers") == {
+        "key_id": "key_1",
+        "ciphertext": "CIPHERTEXT",
+        "actions": {"read": True, "send": False},
+    }
+    await db.set_account_key_actions("hers", {"read": True, "send": True})
+    stored = await db.get_account_key("hers")
+    assert (
+        stored is not None
+        and stored["actions"]["send"] is True
+        and stored["ciphertext"] == "CIPHERTEXT"
+    )
+    await db.clear_account_key("hers")
+    assert await db.get_account_key("hers") is None
+
+
+async def test_general_account_reads_expose_key_id_and_actions_but_never_the_ciphertext(
+    db: DatabaseManager,
+):
+    await _two_users(db)
+    await db.add_account("hers", "her@example.com", "acct-hers")
+    await db.set_account_key("hers", "key_1", "SECRET_CIPHERTEXT", {"read": True})
+    reads = [
+        await db.get_account("hers"),
+        *await db.list_accounts(),
+        *await db.list_accounts_for_user("her@example.com"),
+    ]
+    for account in reads:
+        assert account is not None and "SECRET_CIPHERTEXT" not in repr(account)
+        assert "waha_key_ciphertext" not in account
+    hers = await db.get_account("hers")
+    assert (
+        hers is not None
+        and hers["waha_key_id"] == "key_1"
+        and hers["waha_key_actions"] == {"read": True}
+    )
+    default = await db.get_account("default")
+    assert (
+        default is not None
+        and default["waha_key_id"] is None
+        and default["waha_key_actions"] is None
+    )
+
+
+async def test_an_accounts_table_from_before_the_key_columns_is_migrated(tmp_path):
+    path = str(tmp_path / "old.db")
+    old = DatabaseManager(path)
+    await old.connect()
+    await old.connection.execute(
+        "CREATE TABLE users (email TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', "
+        "is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')"
+    )
+    await old.connection.execute(
+        "CREATE TABLE accounts (id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, "
+        "label TEXT NOT NULL DEFAULT '', waha_session TEXT NOT NULL UNIQUE, "
+        "created_at TEXT NOT NULL DEFAULT '')"
+    )
+    await old.connection.execute("INSERT INTO users (email) VALUES ('me@example.com')")
+    await old.connection.execute(
+        "INSERT INTO accounts (id, owner_email, waha_session) "
+        "VALUES ('default','me@example.com','default')"
+    )
+    await old.connection.commit()
+    await old.ensure_schema()
+    await old.ensure_schema()  # idempotent
+    account = await old.get_account("default")
+    assert account is not None and account["waha_key_id"] is None  # existing row survives
+    await old.set_account_key("default", "k", "C", {"read": True})
+    assert await old.get_account_key("default") is not None
+    await old.close()

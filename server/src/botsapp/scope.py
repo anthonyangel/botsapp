@@ -18,6 +18,7 @@ exist, so ids can't be probed.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -26,12 +27,16 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 
 import botsapp.state as state
+from botsapp.bridge_registry import ScopedKeyError
 from botsapp.message_store import AllowlistedMessageStore
 
 if TYPE_CHECKING:
     from botsapp.bridge import Bridge
     from botsapp.db import DatabaseManager
     from botsapp.message_store import MessageStore
+
+
+logger = logging.getLogger(__name__)
 
 
 class ScopedChatDb:
@@ -109,7 +114,14 @@ async def resolve_scope(account: str | None = None) -> Scope:
     elif account not in ids:
         raise ToolError(f"Unknown account '{account}'. Use list_accounts to see yours.")
 
-    bridge = await registry.for_account(account)
+    try:
+        bridge = await registry.for_account(account, purpose="mcp")
+    except ScopedKeyError as exc:
+        logger.error("no usable scoped WAHA key for %s: %s", account, exc)
+        raise ToolError(
+            "This WhatsApp account isn't ready for MCP access yet; ask an administrator "
+            "to create its access key."
+        ) from exc
     scoped = ScopedChatDb(db, account, viewer)
     return Scope(
         account_id=account,

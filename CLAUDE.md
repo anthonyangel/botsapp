@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0026.
+been kept in date order, current through 0027.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -53,7 +53,9 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   one WorkOS org, role in WorkOS, grants and chat visibility in the DB). Its
   Session and Chats pages act on the account selected in the header (a validated
   cookie); the Accounts and Users pages manage accounts, sharing and people.
-  Needs `BOTSAPP_ADMIN_EMAIL`. Open follow-ups (live WAHA/WorkOS verification,
+  Needs `BOTSAPP_ADMIN_EMAIL`. Each account's MCP access can use its own read-only
+  WAHA session key, stored encrypted ([0027](docs/decisions/0027-scoped-waha-session-keys.md);
+  needs `BOTSAPP_SECRET_KEY`; `WAHA_REQUIRE_SCOPED_KEYS` makes it mandatory). Open follow-ups (live WAHA/WorkOS verification,
   per-account WAHA keys, tool visibility from key scopes, cleanup) are GitHub
   issues, summarised under "Where things stand" in 0025.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked

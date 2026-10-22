@@ -19,4 +19,15 @@ set -eu
 #   Machine's real 6PN IPv6 interface — needs ::, not 0.0.0.0.
 # Don't "simplify" these to match each other; each is required as-is.
 uv run uvicorn botsapp.admin_main:app --host :: --port 8100 &
+
+# Strict mode (docs/decisions/0027): the MCP process uses each account's own
+# scoped WAHA key and must not hold the shared admin key at all, so a bug or a
+# compromise there can't reach other sessions or send. Both processes share one
+# environment on Fly, so withhold it from this one only; admin-ui, started
+# above, keeps it for session lifecycle and key management.
+case "${WAHA_REQUIRE_SCOPED_KEYS:-}" in
+  1 | true | TRUE | True | yes | YES)
+    exec env -u WAHA_API_KEY uv run uvicorn botsapp.main:app --host 0.0.0.0 --port 8000
+    ;;
+esac
 exec uv run uvicorn botsapp.main:app --host 0.0.0.0 --port 8000

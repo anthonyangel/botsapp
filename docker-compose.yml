@@ -7,6 +7,9 @@ x-bridge-env: &bridge-env
   WAHA_API_KEY: ${WAHA_API_KEY:-}
   WAHA_SESSION: ${WAHA_SESSION:-default}
   BOTSAPP_ADMIN_EMAIL: ${BOTSAPP_ADMIN_EMAIL:-}
+  # Scoped WAHA keys (docs/decisions/0027), see .env.example.
+  BOTSAPP_SECRET_KEY: ${BOTSAPP_SECRET_KEY:-}
+  WAHA_REQUIRE_SCOPED_KEYS: ${WAHA_REQUIRE_SCOPED_KEYS:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   TZ: Asia/Jerusalem
 

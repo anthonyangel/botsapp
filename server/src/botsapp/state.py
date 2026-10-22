@@ -14,7 +14,10 @@ if TYPE_CHECKING:
     from botsapp.bridge import Bridge
     from botsapp.bridge_registry import BridgeRegistry
     from botsapp.db import DatabaseManager
+    from botsapp.key_manager import KeyManager
 
 db: DatabaseManager | None = None
 bridge: Bridge | None = None
 registry: BridgeRegistry | None = None
+# Admin UI only: provisions/rotates/verifies the scoped WAHA keys (0027).
+key_manager: KeyManager | None = None

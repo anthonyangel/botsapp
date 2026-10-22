@@ -112,7 +112,14 @@ CREATE TABLE IF NOT EXISTS accounts (
     owner_email  TEXT NOT NULL REFERENCES users (email),
     label        TEXT NOT NULL DEFAULT '',
     waha_session TEXT NOT NULL UNIQUE,
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    -- Scoped WAHA session key (docs/decisions/0027). The id and the effective
+    -- actions are not secret; the ciphertext is, and is only ever read by
+    -- get_account_key, never by the general account queries below. Databases
+    -- created before these columns existed get them from db.py's migration.
+    waha_key_id         TEXT,
+    waha_key_ciphertext TEXT,
+    waha_key_actions    TEXT
 );
 
 -- name: create_grants_table#
@@ -174,14 +181,14 @@ VALUES (:id, :owner_email, :label, :waha_session)
 ON CONFLICT (id) DO NOTHING;
 
 -- name: get_account^
-SELECT id, owner_email, label, waha_session, created_at FROM accounts WHERE id = :id;
+SELECT id, owner_email, label, waha_session, created_at, waha_key_id, waha_key_actions FROM accounts WHERE id = :id;
 
 -- name: list_accounts
-SELECT id, owner_email, label, waha_session, created_at FROM accounts ORDER BY created_at, id;
+SELECT id, owner_email, label, waha_session, created_at, waha_key_id, waha_key_actions FROM accounts ORDER BY created_at, id;
 
 -- name: list_accounts_for_user
 -- Accounts the user owns or has been granted.
-SELECT id, owner_email, label, waha_session, created_at FROM accounts
+SELECT id, owner_email, label, waha_session, created_at, waha_key_id, waha_key_actions FROM accounts
 WHERE owner_email = :email
    OR id IN (SELECT account_id FROM grants WHERE user_email = :email)
 ORDER BY created_at, id;
@@ -248,3 +255,20 @@ DELETE FROM chat_access WHERE account_id = :account_id;
 
 -- name: delete_account!
 DELETE FROM accounts WHERE id = :account_id;
+
+-- name: get_account_key^
+-- The only query that returns the encrypted key.
+SELECT waha_key_id, waha_key_ciphertext, waha_key_actions FROM accounts WHERE id = :account_id;
+
+-- name: set_account_key!
+UPDATE accounts
+SET waha_key_id = :key_id, waha_key_ciphertext = :ciphertext, waha_key_actions = :actions
+WHERE id = :account_id;
+
+-- name: set_account_key_actions!
+UPDATE accounts SET waha_key_actions = :actions WHERE id = :account_id;
+
+-- name: clear_account_key!
+UPDATE accounts
+SET waha_key_id = NULL, waha_key_ciphertext = NULL, waha_key_actions = NULL
+WHERE id = :account_id;

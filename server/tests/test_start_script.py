@@ -1,0 +1,49 @@
+"""start.sh: in strict mode the MCP process is started without the admin key (0027).
+
+Runs the real script with a stand-in `uv` that just reports its arguments and
+whether WAHA_API_KEY is visible to it."""
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+SCRIPT = Path(__file__).resolve().parent.parent / "start.sh"
+
+
+def _run(tmp_path: Path, **env: str) -> dict[str, str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text('#!/bin/sh\necho "$* KEY=${WAHA_API_KEY-<unset>}"\n')
+    uv.chmod(0o755)
+    result = subprocess.run(
+        ["sh", str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "WAHA_API_KEY": "ADMIN", **env},
+        check=True,
+    )
+    lines = {}
+    for line in result.stdout.splitlines():
+        which = "mcp" if "botsapp.main:app" in line else "admin"
+        lines[which] = line.rsplit("KEY=", 1)[1]
+    return lines
+
+
+def test_script_is_valid_shell():
+    subprocess.run(["sh", "-n", str(SCRIPT)], check=True)
+
+
+def test_without_strict_mode_both_processes_see_the_admin_key(tmp_path):
+    assert _run(tmp_path) == {"mcp": "ADMIN", "admin": "ADMIN"}
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes"])
+def test_strict_mode_withholds_the_admin_key_from_the_mcp_process_only(tmp_path, value):
+    assert _run(tmp_path, WAHA_REQUIRE_SCOPED_KEYS=value) == {"mcp": "<unset>", "admin": "ADMIN"}
+
+
+def test_strict_false_is_not_strict(tmp_path):
+    assert _run(tmp_path, WAHA_REQUIRE_SCOPED_KEYS="false")["mcp"] == "ADMIN"

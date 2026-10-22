@@ -34,6 +34,7 @@ import botsapp.state as state
 from botsapp.admin import auth, templates
 from botsapp.admin.users import _back, _form_text, live_admin_check
 from botsapp.bridge_registry import session_name_for
+from botsapp.key_manager import KeyManagerError, describe_drift, drift_from_policy
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ async def _session_label(account_id: str) -> str:
     """Short human status of an account's WAHA session; never raises."""
     assert state.registry is not None
     try:
-        client = await state.registry.for_account(account_id)
+        client = await state.registry.for_account(account_id, purpose="admin")
         status = await client.get_session_status()
     except Exception as exc:
         logger.warning("session status for %s unavailable: %s", account_id, exc)
@@ -88,6 +89,14 @@ async def accounts_index(request: Request) -> Response:
                 "granted": granted,
                 "grantable": [u for u in users if u != account["owner_email"] and u not in granted],
                 "deletable": is_admin and account["id"] != auth.DEFAULT_ACCOUNT_ID,
+                "manage_key": is_admin,
+                "key_id": account["waha_key_id"],
+                "key_drift": (
+                    describe_drift(drift_from_policy(account["waha_key_actions"] or {}))
+                    if account["waha_key_id"]
+                    else ""
+                ),
+                "can_store_key": bool(state.key_manager and state.key_manager.can_store),
             }
         )
     return HTMLResponse(
@@ -125,6 +134,27 @@ async def create_account(request: Request) -> Response:
         logger.exception("creating the WAHA session for %s failed", account_id)
         await state.db.delete_account(account_id)
         return _err(f"Couldn't create the WhatsApp session ({exc}); nothing was created.")
+
+    manager = state.key_manager
+    if manager is None or not manager.can_store:
+        return _ok(
+            f"Created account '{account_id}' for {owner}, but no access key: BOTSAPP_SECRET_KEY "
+            "or the WAHA admin key isn't set here. Until one is created the MCP server "
+            "uses the shared key for it."
+        )
+    try:
+        await manager.provision(account_id)
+    except KeyManagerError as exc:
+        # Undo the session and the row: an account without its key would silently
+        # fall back to (or, in strict mode, be locked out of) the shared key.
+        try:
+            await state.registry.delete_session(account_id)
+        except Exception:
+            logger.exception(
+                "could not remove the WAHA session for %s after a key failure", account_id
+            )
+        await state.db.delete_account(account_id)
+        return _err(f"Couldn't create the access key ({exc}); nothing was created.")
     return _ok(f"Created account '{account_id}' for {owner}. They can now pair it.")
 
 
@@ -138,6 +168,14 @@ async def delete_account(request: Request) -> Response:
     if refused := await live_admin_check(request, _BACK):
         return refused
 
+    account = await state.db.get_account(account_id)
+    if account is not None and account["waha_key_id"]:
+        if state.key_manager is None:
+            return _err("Can't delete the account's access key: the WAHA admin key isn't set here.")
+        try:
+            await state.key_manager.revoke(account_id)
+        except KeyManagerError as exc:
+            return _err(str(exc))
     try:
         await state.registry.delete_session(account_id)
     except Exception as exc:
@@ -219,3 +257,47 @@ async def select_account(request: Request) -> Response:
         path="/",
     )
     return response
+
+
+async def _key_action(request: Request, action: str) -> Response:
+    assert state.db is not None
+    account_id = request.path_params["account_id"]
+    if await state.db.get_account(account_id) is None:
+        return _err("Unknown account.")
+    manager = state.key_manager
+    if manager is None:
+        return _err("The WAHA admin key isn't set here, so keys can't be managed.")
+    if refused := await live_admin_check(request, _BACK):
+        return refused
+    try:
+        if action == "create":
+            await manager.provision(account_id)
+            return _ok(f"Created a read-only access key for '{account_id}'.")
+        if action == "rotate":
+            _info, old_deleted = await manager.rotate(account_id)
+            extra = (
+                "" if old_deleted else " The old key couldn't be deleted in WAHA; remove it there."
+            )
+            return _ok(f"Rotated the access key for '{account_id}'.{extra}")
+        verification = await manager.verify(account_id)
+    except KeyManagerError as exc:
+        return _err(str(exc))
+    if verification.drift:
+        drift = describe_drift(verification.drift)
+        return _err(
+            f"The key's scope in WAHA differs from what we want ({drift}). "
+            "Rotate it to restore the intended scope."
+        )
+    return _ok(f"The access key for '{account_id}' is intact and read-only.")
+
+
+async def key_create(request: Request) -> Response:
+    return await _key_action(request, "create")
+
+
+async def key_rotate(request: Request) -> Response:
+    return await _key_action(request, "rotate")
+
+
+async def key_verify(request: Request) -> Response:
+    return await _key_action(request, "verify")

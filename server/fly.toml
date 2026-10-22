@@ -57,6 +57,13 @@ primary_region = "fra"
   # Note start.sh backgrounds the admin UI, so a refusal to start is silent to
   # Fly's health checks: check `fly logs` after deploying.
   ADMIN_DISABLE_AUTH = "true"
+  # Scoped WAHA keys (docs/decisions/0027). BOTSAPP_SECRET_KEY, the master key that
+  # encrypts the stored keys, is a `fly secrets` value, never set here. Rollout: set it,
+  # deploy, create each account's key on the Accounts page (including "default"), check
+  # the MCP server still works, THEN uncomment the line below. In strict mode start.sh
+  # withholds WAHA_API_KEY from the MCP process and the MCP server refuses accounts
+  # without a key. To undo, remove the line and redeploy.
+  # WAHA_REQUIRE_SCOPED_KEYS = "true"
   LOG_LEVEL = "INFO"
   # This app's own public URL — must match whatever `fly apps create`
   # actually names it (https://<app-name>.fly.dev).

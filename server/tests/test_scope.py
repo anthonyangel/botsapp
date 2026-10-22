@@ -105,3 +105,35 @@ async def test_revoked_viewer_loses_the_account_immediately(real_db, monkeypatch
         await held.db.set_chat_allowed("shared@g.us", True)
     with pytest.raises(ToolError):
         await resolve_scope("default")
+
+
+# ── scoped WAHA keys (0027) ──────────────────────────────────────────────────
+
+
+async def test_scope_resolution_asks_for_the_mcp_key_not_the_admin_key(real_db, monkeypatch):
+    _as(monkeypatch, HER)
+    seen = {}
+    real = state.registry.for_account
+
+    async def spy(account_id, *, purpose):
+        seen["purpose"] = purpose
+        return await real(account_id, purpose=purpose)
+
+    monkeypatch.setattr(state.registry, "for_account", spy)
+    await resolve_scope(None)
+    assert seen == {"purpose": "mcp"}
+
+
+async def test_a_missing_scoped_key_reads_as_not_ready_without_internals(
+    real_db, monkeypatch, caplog
+):
+    from botsapp.bridge_registry import BridgeRegistry
+
+    await state.registry.close()
+    state.registry = BridgeRegistry(real_db, "http://waha:3000", "ADMIN", require_scoped_keys=True)
+    _as(monkeypatch, HER)
+    with pytest.raises(ToolError) as excinfo:
+        await resolve_scope(None)
+    message = str(excinfo.value)
+    assert "isn't ready" in message and "administrator" in message
+    assert "scoped" not in message.lower() and "ADMIN" not in message and "acct-" not in message

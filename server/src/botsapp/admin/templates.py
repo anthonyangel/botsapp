@@ -1214,6 +1214,31 @@ def _account_card(row: dict[str, Any], current: str) -> str:
         if options
         else ""
     )
+    key_block = ""
+    if row.get("manage_key"):
+        if row.get("key_id"):
+            state_text = (
+                "read-only, as intended"
+                if not row.get("key_drift")
+                else "<b>differs from intended</b>: " + html.escape(row["key_drift"])
+            )
+            buttons = f"""
+        <form method="post" action="/accounts/{aid}/key/verify" style="display:inline;">
+          <button class="mdl-button mdl-js-button" type="submit">Verify</button></form>
+        <form method="post" action="/accounts/{aid}/key/rotate" style="display:inline;"
+              onsubmit="return confirm('Replace this account\'s access key?');">
+          <button class="mdl-button mdl-js-button" type="submit">Rotate</button></form>"""
+        elif row.get("can_store_key"):
+            state_text = "none: the MCP server is using the shared admin key for this account"
+            buttons = f"""
+        <form method="post" action="/accounts/{aid}/key/create" style="display:inline;">
+          <button class="mdl-button mdl-js-button mdl-button--raised" type="submit">
+            Create access key</button></form>"""
+        else:
+            state_text = "none, and BOTSAPP_SECRET_KEY isn't set so one can't be stored"
+            buttons = ""
+        key_block = f"""
+      <p class="tab-note">WAHA access key: {state_text}</p>{buttons}"""
     delete = (
         f"""
       <form method="post" action="/accounts/{aid}/delete" style="margin-top:12px;"
@@ -1229,6 +1254,7 @@ def _account_card(row: dict[str, Any], current: str) -> str:
       <p class="tab-note">id <code>{html.escape(row["id"])}</code> · owner
         {html.escape(row["owner"])} · WhatsApp: <b>{html.escape(row["status"])}</b></p>
       <p><a href="/accounts/{aid}/select">Use this account</a></p>
+      {key_block}
       <b>Shared with</b>
       {grants}
       {grant_form}

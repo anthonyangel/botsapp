@@ -41,9 +41,12 @@ import botsapp.state as state
 from botsapp.admin import accounts, auth, templates, users
 from botsapp.bridge_factory import bridge_provider_name, build_registry
 from botsapp.db import DatabaseManager
+from botsapp.key_manager import KeyManager, make_probe
 from botsapp.scope import ScopedChatDb
+from botsapp.secretbox import SecretBox
 from botsapp.session import connect_or_get_status, get_status
 from botsapp.waha_client import WAHAClient
+from botsapp.waha_keys import WahaKeyApi
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +74,28 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
     else:
         logger.error("BOTSAPP_ADMIN_EMAIL is not set: no user will be an admin or own an account")
 
-    state.registry = build_registry(state.db)
+    box = SecretBox.from_env()
+    state.registry = build_registry(state.db, box)
+    if admin_key := os.environ.get("WAHA_API_KEY"):
+        admin_client = WAHAClient(os.environ["WAHA_URL"], admin_key)
+        state.key_manager = KeyManager(
+            state.db,
+            WahaKeyApi(admin_client),
+            box,
+            make_probe(os.environ["WAHA_URL"]),
+        )
+    else:
+        admin_client = None
+        logger.error("WAHA_API_KEY is not set: the admin UI can't manage sessions or keys")
+    if box is None:
+        logger.warning("BOTSAPP_SECRET_KEY is not set: scoped WAHA keys can't be created")
     logger.info("Admin UI ready (bridge: %s)", bridge_provider_name())
 
     yield
 
+    if admin_client is not None:
+        await admin_client.close()
+    state.key_manager = None
     await state.registry.close()
     await state.db.close()
     state.db = None
@@ -128,7 +148,7 @@ async def _bridge(request: Request) -> WAHAClient:
     MessageStore — deliberately not AllowlistedMessageStore, since this UI's
     whole purpose is to see (and allow) chats that aren't allowed yet."""
     assert state.registry is not None
-    return await state.registry.for_account(request.state.account)
+    return await state.registry.for_account(request.state.account, purpose="admin")
 
 
 def _chat_db(request: Request, viewer: str | None = None) -> ScopedChatDb:
@@ -512,6 +532,9 @@ app = Starlette(
         Route("/accounts/{account_id}/grant", accounts.grant_account, methods=["POST"]),
         Route("/accounts/{account_id}/revoke", accounts.revoke_account, methods=["POST"]),
         Route("/accounts/{account_id}/delete", accounts.delete_account, methods=["POST"]),
+        Route("/accounts/{account_id}/key/create", accounts.key_create, methods=["POST"]),
+        Route("/accounts/{account_id}/key/rotate", accounts.key_rotate, methods=["POST"]),
+        Route("/accounts/{account_id}/key/verify", accounts.key_verify, methods=["POST"]),
         *auth.routes,
     ],
     middleware=[Middleware(auth.AuthMiddleware)],

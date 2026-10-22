@@ -63,12 +63,29 @@ class DatabaseManager:
         await queries.create_allowed_emails_table(self.connection)
         await queries.create_users_table(self.connection)
         await queries.create_accounts_table(self.connection)
+        await self._add_missing_account_columns()
         await queries.create_grants_table(self.connection)
         await queries.create_chat_access_table(self.connection)
         # One-time, idempotent: anyone on the legacy email allowlist becomes
         # a user. After this users is the source of truth (0025).
         await queries.backfill_users_from_allowed_emails(self.connection)
         await self.connection.commit()
+
+    async def _add_missing_account_columns(self) -> None:
+        """CREATE TABLE IF NOT EXISTS leaves an older ``accounts`` table as it was;
+        add the scoped-key columns to it. Idempotent."""
+        cursor = await self.connection.execute("PRAGMA table_info(accounts)")
+        have = {row[1] async for row in cursor}
+        for column in ("waha_key_id", "waha_key_ciphertext", "waha_key_actions"):
+            if column not in have:
+                await self.connection.execute(f"ALTER TABLE accounts ADD COLUMN {column} TEXT")
+
+    @staticmethod
+    def _account_row(row: aiosqlite.Row) -> dict[str, Any]:
+        d = dict(row)
+        raw = d.get("waha_key_actions")
+        d["waha_key_actions"] = json.loads(raw) if raw else None
+        return d
 
     @staticmethod
     def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
@@ -217,6 +234,42 @@ class DatabaseManager:
         )
         await self.connection.commit()
 
+    # ── Scoped WAHA key (docs/decisions/0027) ────────────────────────────
+
+    async def get_account_key(self, account_id: str) -> dict[str, Any] | None:
+        """``{key_id, ciphertext, actions}`` for the account, or None if it has no
+        key. The only read that returns the ciphertext."""
+        row = await queries.get_account_key(self.connection, account_id=account_id)
+        if row is None or not row["waha_key_ciphertext"]:
+            return None
+        return {
+            "key_id": row["waha_key_id"],
+            "ciphertext": row["waha_key_ciphertext"],
+            "actions": json.loads(row["waha_key_actions"]) if row["waha_key_actions"] else {},
+        }
+
+    async def set_account_key(
+        self, account_id: str, key_id: str, ciphertext: str, actions: dict[str, bool]
+    ) -> None:
+        await queries.set_account_key(
+            self.connection,
+            account_id=account_id,
+            key_id=key_id,
+            ciphertext=ciphertext,
+            actions=json.dumps(actions),
+        )
+        await self.connection.commit()
+
+    async def set_account_key_actions(self, account_id: str, actions: dict[str, bool]) -> None:
+        await queries.set_account_key_actions(
+            self.connection, account_id=account_id, actions=json.dumps(actions)
+        )
+        await self.connection.commit()
+
+    async def clear_account_key(self, account_id: str) -> None:
+        await queries.clear_account_key(self.connection, account_id=account_id)
+        await self.connection.commit()
+
     async def delete_account(self, account_id: str) -> None:
         """Remove an account with its grants and every viewer's chat access.
         The caller deletes the WAHA session first (see BridgeRegistry)."""
@@ -227,14 +280,17 @@ class DatabaseManager:
 
     async def get_account(self, account_id: str) -> dict[str, Any] | None:
         row = await queries.get_account(self.connection, id=account_id)
-        return dict(row) if row else None
+        return self._account_row(row) if row else None
 
     async def list_accounts(self) -> list[dict[str, Any]]:
-        return [dict(r) async for r in queries.list_accounts(self.connection)]
+        return [self._account_row(r) async for r in queries.list_accounts(self.connection)]
 
     async def list_accounts_for_user(self, email: str) -> list[dict[str, Any]]:
         email = self._normalize_email(email)
-        return [dict(r) async for r in queries.list_accounts_for_user(self.connection, email=email)]
+        return [
+            self._account_row(r)
+            async for r in queries.list_accounts_for_user(self.connection, email=email)
+        ]
 
     async def has_account_access(self, account_id: str, email: str) -> bool:
         row = await queries.has_account_access(

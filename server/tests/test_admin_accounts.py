@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from cryptography.fernet import Fernet
+from fake_waha import FakeWaha
 from starlette.testclient import TestClient
 
 import botsapp.admin.accounts as accounts_module
@@ -15,6 +17,8 @@ import botsapp.admin.app as admin_app
 import botsapp.admin.auth as auth
 import botsapp.state as state
 from botsapp.bridge import SessionStatus
+from botsapp.key_manager import KeyManager
+from botsapp.secretbox import SecretBox
 
 BASE = "https://admin.example.test"
 ADMIN, SAM, HER, STRANGER = (
@@ -42,6 +46,10 @@ def client(monkeypatch, tmp_path) -> Iterator[TestClient]:
         state.registry.delete_session = AsyncMock()
         c.create_session = state.registry.create_session
         c.delete_session = state.registry.delete_session
+        # Scoped WAHA keys (0027): a real KeyManager over an in-memory WAHA.
+        c.waha = FakeWaha()
+        c.box = SecretBox([Fernet.generate_key().decode()])
+        state.key_manager = KeyManager(_db(), c.waha, c.box)
         yield c
 
 
@@ -55,6 +63,17 @@ def _post(client: TestClient, path: str, **data: str):
 
 def _flash(response) -> dict[str, list[str]]:
     return parse_qs(urlparse(response.headers["location"]).query)
+
+
+def _db():
+    assert state.db is not None
+    return state.db
+
+
+async def _stored_key_id(account_id: str) -> str:
+    stored = await _db().get_account_key(account_id)
+    assert stored is not None
+    return stored["key_id"]
 
 
 async def _setup_people() -> None:
@@ -329,3 +348,108 @@ async def test_switcher_appears_only_with_several_accounts_and_admin_links_only_
     assert 'aria-label="Account"' in page and "Her phone" in page
     _as(client, ADMIN)
     assert 'href="/users"' in client.get("/accounts").text
+
+
+# ── scoped WAHA keys on the Accounts page (0027) ─────────────────────────────
+
+
+async def test_creating_an_account_also_creates_its_read_only_key(client, people):
+    _as(client, ADMIN)
+    assert "notice" in _flash(_post(client, "/accounts/create", id="sam", owner=SAM))
+    stored = await state.db.get_account_key("sam")
+    assert stored is not None and stored["actions"]["send"] is False
+    assert len(client.waha.keys) == 1
+    assert client.waha.keys[stored["key_id"]].session == "acct-sam"
+
+
+async def test_a_key_failure_undoes_the_session_and_the_account(client, people):
+    _as(client, ADMIN)
+    client.waha.fail.add("create")
+    r = _post(client, "/accounts/create", id="sam", owner=SAM)
+    assert "nothing was created" in _flash(r)["error"][0]
+    assert await state.db.get_account("sam") is None
+    client.delete_session.assert_awaited_once_with("sam")
+    assert not client.waha.keys
+
+
+async def test_without_a_master_key_the_account_is_made_but_says_it_has_no_key(client, people):
+    state.key_manager = KeyManager(_db(), client.waha, None)
+    _as(client, ADMIN)
+    r = _post(client, "/accounts/create", id="sam", owner=SAM)
+    assert "BOTSAPP_SECRET_KEY" in _flash(r)["notice"][0]
+    assert await state.db.get_account("sam") is not None
+    assert await state.db.get_account_key("sam") is None and not client.waha.keys
+
+
+async def test_deleting_an_account_deletes_its_key_first(client, people):
+    _as(client, ADMIN)
+    _post(client, "/accounts/create", id="sam", owner=SAM)
+    key_id = await _stored_key_id("sam")
+    assert "notice" in _flash(_post(client, "/accounts/sam/delete"))
+    assert key_id in client.waha.deleted and not client.waha.keys
+    assert await state.db.get_account("sam") is None
+
+
+async def test_a_failed_key_delete_keeps_the_account_and_its_session(client, people):
+    _as(client, ADMIN)
+    _post(client, "/accounts/create", id="sam", owner=SAM)
+    client.delete_session.reset_mock()
+    client.waha.fail.add("delete")
+    assert "nothing changed" in _flash(_post(client, "/accounts/sam/delete"))["error"][0]
+    assert await state.db.get_account("sam") is not None
+    client.delete_session.assert_not_awaited()
+
+
+async def test_an_existing_account_without_a_key_can_be_given_one(client, people):
+    _as(client, ADMIN)
+    page = client.get("/accounts").text
+    assert "using the shared admin key" in page and "Create access key" in page
+    assert "notice" in _flash(_post(client, "/accounts/default/key/create"))
+    assert await state.db.get_account_key("default") is not None
+    page = client.get("/accounts").text
+    assert "read-only, as intended" in page and "Rotate" in page and "Verify" in page
+
+
+async def test_rotating_replaces_the_key(client, people):
+    _as(client, ADMIN)
+    _post(client, "/accounts/default/key/create")
+    first = await _stored_key_id("default")
+    assert "notice" in _flash(_post(client, "/accounts/default/key/rotate"))
+    second = await _stored_key_id("default")
+    assert second != first and first in client.waha.deleted
+
+
+async def test_verify_shows_a_scope_edited_in_wahas_dashboard(client, people):
+    from botsapp.waha_keys import KeyInfo
+
+    _as(client, ADMIN)
+    _post(client, "/accounts/default/key/create")
+    key_id = await _stored_key_id("default")
+    info = client.waha.keys[key_id]
+    client.waha.keys[key_id] = KeyInfo(
+        key_id, info.session, False, True, {**info.actions, "send": True}
+    )
+    assert "differs" in _flash(_post(client, "/accounts/default/key/verify"))["error"][0]
+    assert "differs from intended" in client.get("/accounts").text
+
+
+async def test_creating_a_second_key_is_refused(client, people):
+    _as(client, ADMIN)
+    _post(client, "/accounts/default/key/create")
+    assert "rotate" in _flash(_post(client, "/accounts/default/key/create"))["error"][0].lower()
+
+
+async def test_key_controls_are_admin_only_and_hidden_from_owners(client, people):
+    await state.db.add_account("sam", SAM, "acct-sam")
+    _as(client, SAM)
+    assert "/key/" not in client.get("/accounts").text
+    for action in ("create", "rotate", "verify"):
+        assert _post(client, f"/accounts/sam/key/{action}").status_code == 403
+    assert await state.db.get_account_key("sam") is None
+
+
+async def test_key_actions_on_an_unknown_account_or_without_the_admin_key(client, people):
+    _as(client, ADMIN)
+    assert "Unknown account" in _flash(_post(client, "/accounts/ghost/key/create"))["error"][0]
+    state.key_manager = None
+    assert "admin key" in _flash(_post(client, "/accounts/default/key/create"))["error"][0]

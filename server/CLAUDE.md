@@ -37,6 +37,12 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
 - `bridge_registry.py` — `BridgeRegistry`: one `WAHAClient` per `accounts` row (its own
   WAHA session), built lazily; maps account → client, decides no authorization.
   See [0025](../docs/decisions/0025-multi-tenancy-users-accounts-grants.md).
+- `secretbox.py` / `waha_keys.py` / `key_manager.py` — scoped WAHA session keys
+  ([0027](../docs/decisions/0027-scoped-waha-session-keys.md)): Fernet encryption of the
+  stored keys, WAHA key parsing + the `KeyApi` protocol, and `KeyManager`
+  (provision/rotate/verify/revoke: change WAHA, read it back, then record). The registry
+  takes a required `purpose` (`"mcp"` = the account's scoped key, `"admin"` = the admin
+  key) and fails closed under `WAHA_REQUIRE_SCOPED_KEYS`.
 - `scope.py` — `resolve_scope(account)`: per tool call, caller email (token) +
   account → `Scope(bridge, ScopedChatDb, AllowlistedMessageStore)` bound to that
   (account, viewer). Every reachable tool must start with it; never read
