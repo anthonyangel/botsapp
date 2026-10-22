@@ -86,6 +86,10 @@ def client(monkeypatch, stub):
         state.db.get_user = AsyncMock(side_effect=lambda e: users.get(e))
         primary = {"id": "default", "label": "Primary", "owner_email": OWNER}
         state.db.list_accounts = AsyncMock(return_value=[primary])
+        state.db.get_account = AsyncMock(return_value=primary)
+        state.db.list_grants = AsyncMock(return_value=[GUEST])
+        state.db.list_allowed_jids_for = AsyncMock(return_value=set())
+        state.db.get_chat_access = AsyncMock(return_value=None)
         state.db.list_accounts_for_user = AsyncMock(
             side_effect=lambda e: [primary] if e in holders else []
         )

@@ -62,6 +62,8 @@ def client(monkeypatch):
         primary = {"id": "default", "label": "Primary", "owner_email": "admin@example.com"}
         state.db.list_accounts_for_user = AsyncMock(return_value=[primary])
         state.db.list_accounts = AsyncMock(return_value=[primary])
+        state.db.get_account = AsyncMock(return_value=primary)
+        state.db.list_grants = AsyncMock(return_value=[])
 
         async def _bridge(_request):
             return state.bridge
@@ -69,7 +71,7 @@ def client(monkeypatch):
         monkeypatch.setattr(admin_app, "_bridge", _bridge)
         chat_db = AsyncMock()
         chat_db.get_chat_metadata.return_value = None
-        monkeypatch.setattr(admin_app, "_chat_db", lambda _request: chat_db)
+        monkeypatch.setattr(admin_app, "_chat_db", lambda _request, _viewer=None: chat_db)
         c.chat_db = chat_db
         # Module-level, populated fresh by each /chats GET (see its own
         # docstring) — reset between tests so one test's community jid

@@ -204,7 +204,9 @@ async def select_account(request: Request) -> Response:
 
     target = _BACK
     referer = urlparse(request.headers.get("referer", ""))
-    if referer.netloc and referer.netloc == request.headers.get("host") and referer.path:
+    if request.query_params.get("next"):
+        target = auth._safe_next(request.query_params["next"])
+    elif referer.netloc and referer.netloc == request.headers.get("host") and referer.path:
         target = auth._safe_next(referer.path)
     response = RedirectResponse(url=target, status_code=303)
     response.set_cookie(

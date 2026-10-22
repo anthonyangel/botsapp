@@ -317,12 +317,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         mine = await state.db.list_accounts_for_user(email)
         selectable = await state.db.list_accounts() if user["is_admin"] else mine
         account_id = _resolve_account(request, email, mine, selectable)
-        if policy == "owner":
-            account = next((a for a in selectable if a["id"] == account_id), None)
-            if account is None:
+        chosen = next((a for a in selectable if a["id"] == account_id), None)
+        can_manage_session = chosen is not None and (
+            bool(user["is_admin"]) or chosen["owner_email"] == email
+        )
+        if policy == "owner" and not can_manage_session:
+            if request.url.path == "/" and request.method == "GET":
+                # The landing page is the Session page; for someone who only has
+                # a shared account, send them somewhere they can act.
+                return RedirectResponse(url="/accounts", status_code=303)
+            if chosen is None:
                 return _denied(403, "You don't have a WhatsApp account yet.")
-            if not user["is_admin"] and account["owner_email"] != email:
-                return _denied(403, "Only the account's owner can manage its session.")
+            return _denied(403, "Only the account's owner can manage its session.")
         elif policy == "member" and account_id not in {a["id"] for a in mine}:
             return _denied(403, "You don't have access to a WhatsApp account.")
 
@@ -334,6 +340,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 is_admin=bool(user["is_admin"]),
                 accounts=tuple((a["id"], a["label"] or a["id"]) for a in selectable),
                 account=account_id or "",
+                can_manage_session=can_manage_session,
             )
         )
         try:

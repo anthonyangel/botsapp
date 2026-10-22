@@ -1,6 +1,6 @@
 # 0026 — Admin login via AuthKit, one WorkOS organization, and the authn/authz split
 
-**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Users page implemented in #49 (below). Accounts page implemented in #50 (below). Still to do: #51 (self-service), #52 (scoped WAHA keys).
+**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Users page implemented in #49 (below). Accounts page implemented in #50 and the self-service Chats behaviour in #51 (both below). Still to do: (self-service), #52 (scoped WAHA keys).
 
 ## Context
 
@@ -89,6 +89,18 @@ What WorkOS can express was checked against its own docs ([FGA](https://workos.c
 - An admin can select any account and so pair or reset its session, but holds no grant and therefore sees no chats there; the Chats pages need a real grant.
 - Session creation uses `POST /api/sessions` with `start: false`, and pairing later relies on `restart` of a STOPPED session. Neither multi-session creation nor that restart path has been run against a live WAHA (#47).
 - The select link is a GET that sets a preference cookie; it grants nothing (every request revalidates), so a cross-site trigger can only change which of the user's own accounts is shown.
+
+## As built (#51, self-service Chats)
+
+There is no separate `/me/*` tree: the existing Session and Chats pages, acting on the selected account (#50), *are* the self-service pages. #51 made the Chats page role-aware, which closed a hole:
+
+- **The hole.** Before #51 the Chats page treated anyone holding the selected account like its owner: a person an account was *shared with* saw every chat on it and could POST `/chats/<jid>/allow` to allow any of them for themself, which the MCP server would then honour (it reads `chat_access`). Account sharing was only reachable via the database until #50 added the UI, so nothing shipped to production exposed it, but #48–#50 on this branch had it.
+- **Owner** (`accounts.owner_email`): sees every chat, toggles "Visible to MCP" for their own view, and picks any granted viewer (`?viewer=`) to choose what *that person* sees. Only the owner can toggle, for any viewer, and only for people who actually hold the account.
+- **Shared viewer:** sees only the chats made visible to them, not the others or how many there are; cannot toggle (not even with `?viewer=` set to themself); can label those chats for themself; cannot label a chat that wasn't shared with them; cannot read or change anyone else's view. A scope or page that has been loaded before a revoke stops yielding chats at once because every DB read re-checks the grant.
+- **Tags are each person's own.** The owner choosing someone's visibility does not edit that person's tags.
+- **Admins** have no special rights on the Chats pages: without a grant they get a 403, as before.
+- Landing: someone whose only account is shared with them is sent from `/` to `/accounts` instead of a 403, and the Session link is hidden unless they own the selected account (or are an admin). Pairing, disconnect and reset stay with the owner.
+- The Accounts page links each granted person to "Choose chats", which selects the account and opens that person's view.
 
 ## Open check before implementing
 

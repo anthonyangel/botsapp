@@ -19,15 +19,22 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 import phonenumbers
 from starlette.applications import Starlette
 from starlette.datastructures import FormData
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from starlette.routing import Route
 
 import botsapp.state as state
@@ -124,11 +131,60 @@ async def _bridge(request: Request) -> WAHAClient:
     return await state.registry.for_account(request.state.account)
 
 
-def _chat_db(request: Request) -> ScopedChatDb:
-    """Chat allowlist/tags for the signed-in user on the selected account —
-    the same (account, viewer) an MCP call from that user resolves to."""
+def _chat_db(request: Request, viewer: str | None = None) -> ScopedChatDb:
+    """Chat allowlist/tags for ``viewer`` (default: the signed-in user) on the
+    selected account — the same (account, viewer) an MCP call from that user
+    resolves to."""
     assert state.db is not None
-    return ScopedChatDb(state.db, request.state.account, request.state.user["email"])
+    return ScopedChatDb(state.db, request.state.account, viewer or request.state.user["email"])
+
+
+@dataclass(frozen=True)
+class _ChatAccess:
+    """What the signed-in user may do on the Chats pages of the selected account.
+
+    The account's *owner* sees every chat and decides what each person with
+    access can see (their own view included). Anyone it was *shared with* sees
+    only the chats the owner made visible to them, can label those for
+    themself, and can't change what is shared: otherwise they could simply
+    allow every chat for themself, which the MCP server would then honour.
+    """
+
+    me: str
+    owner: str
+    viewer: str  # whose visibility is being read/edited
+    is_owner: bool
+    chat_db: ScopedChatDb
+
+    @property
+    def can_toggle(self) -> bool:
+        return self.is_owner
+
+    @property
+    def can_tag(self) -> bool:
+        return self.viewer == self.me
+
+
+async def _chat_access(request: Request) -> _ChatAccess | Response:
+    assert state.db is not None
+    me = request.state.user["email"]
+    account = await state.db.get_account(request.state.account)
+    if account is None:
+        return PlainTextResponse("Unknown account", status_code=404)
+    is_owner = account["owner_email"] == me
+    viewer = request.query_params.get("viewer", "").strip().lower() or me
+    if viewer != me:
+        holders = {account["owner_email"], *await state.db.list_grants(account["id"])}
+        if not is_owner or viewer not in holders:
+            # Same answer whether the person exists or not.
+            return PlainTextResponse("Unknown viewer", status_code=403)
+    return _ChatAccess(
+        me=me,
+        owner=account["owner_email"],
+        viewer=viewer,
+        is_owner=is_owner,
+        chat_db=_chat_db(request, viewer),
+    )
 
 
 async def _poll_status(request: Request) -> dict[str, Any]:
@@ -182,14 +238,24 @@ async def session_delete(request: Request) -> Response:
 
 
 async def chats_index(request: Request) -> Response:
+    assert state.db is not None
+    access = await _chat_access(request)
+    if isinstance(access, Response):
+        return access
+    chat_db = access.chat_db
     bridge = await _bridge(request)
-    chat_db = _chat_db(request)
 
     session_status = await get_status(bridge)
     if not session_status.logged_in:
         return HTMLResponse(templates.not_connected_page(bridge_provider_name()))
 
+    # Someone the account was shared with sees only what the owner made visible
+    # to them: not the owner's other chats, nor how many there are.
+    visible = None if access.is_owner else await chat_db.list_allowed_jids()
+
     all_chats = await bridge.get_chats(limit=1000, offset=0)
+    if visible is not None:
+        all_chats = [c for c in all_chats if c["jid"] in visible]
     direct_chats = [c for c in all_chats if _classify(c["jid"]) == "direct"]
     newsletter_chats = [c for c in all_chats if _classify(c["jid"]) == "newsletter"]
     group_jids_with_history = {c["jid"] for c in all_chats if _classify(c["jid"]) == "group"}
@@ -267,6 +333,8 @@ async def chats_index(request: Request) -> Response:
     # and the gap is surfaced in the UI instead of silently under-showing.
     # Counts *all* @g.us jids (communities included) — the gap isn't
     # specific to either kind.
+    if visible is not None:
+        groups = [g for g in groups if g.jid in visible]
     group_count_loaded = len(groups)
     group_count_total = len(group_jids_with_history | {g.jid for g in groups})
 
@@ -327,8 +395,19 @@ async def chats_index(request: Request) -> Response:
             "tags": meta.get("tags") or [],
         }
 
-    return HTMLResponse(
-        templates.browse_page(
+    grants = await state.db.list_grants(request.state.account) if access.is_owner else []
+    token = templates.chat_view.set(
+        templates.ChatView(
+            can_toggle=access.can_toggle,
+            can_tag=access.can_tag,
+            for_viewer="" if access.viewer == access.me else access.viewer,
+            me=access.me,
+            owner=access.owner,
+            viewers=(access.me, *grants) if access.is_owner else (),
+        )
+    )
+    try:
+        page = templates.browse_page(
             direct_rows,
             group_rows,
             community_rows,
@@ -338,7 +417,9 @@ async def chats_index(request: Request) -> Response:
             group_count_loaded=group_count_loaded,
             group_count_total=group_count_total,
         )
-    )
+    finally:
+        templates.chat_view.reset(token)
+    return HTMLResponse(page)
 
 
 _PANEL_BY_CLASS = {
@@ -350,7 +431,7 @@ _PANEL_BY_CLASS = {
 }
 
 
-def _redirect_to_tab(jid: str) -> RedirectResponse:
+def _redirect_to_tab(jid: str, viewer: str = "") -> RedirectResponse:
     """Redirect back to /chats on the tab the acted-on jid actually lives
     in, not always the first (Chats) tab — otherwise ticking a checkbox on
     the Groups tab flips the page back to Chats, discarding where you were.
@@ -363,15 +444,22 @@ def _redirect_to_tab(jid: str) -> RedirectResponse:
     """
     panel_class = "community" if jid in _community_jids else _classify(jid)
     panel = _PANEL_BY_CLASS[panel_class]
-    return RedirectResponse(url=f"/chats#{panel}", status_code=303)
+    query = f"?{urlencode({'viewer': viewer})}" if viewer else ""
+    return RedirectResponse(url=f"/chats{query}#{panel}", status_code=303)
 
 
 async def toggle_allowed(request: Request) -> Response:
+    access = await _chat_access(request)
+    if isinstance(access, Response):
+        return access
+    if not access.can_toggle:
+        # Not the account's owner: a shared-with viewer can't widen what they see.
+        return PlainTextResponse("Only the account's owner can change what is shared", 403)
     jid = request.path_params["jid"]
     form = await request.form()
     is_allowed = form.get("is_allowed") == "on"
-    await _chat_db(request).set_chat_allowed(jid=jid, is_allowed=is_allowed)
-    return _redirect_to_tab(jid)
+    await access.chat_db.set_chat_allowed(jid=jid, is_allowed=is_allowed)
+    return _redirect_to_tab(jid, "" if access.viewer == access.me else access.viewer)
 
 
 def _form_str(form: FormData, key: str) -> str:
@@ -383,10 +471,18 @@ def _form_str(form: FormData, key: str) -> str:
 
 
 async def save_metadata(request: Request) -> Response:
+    access = await _chat_access(request)
+    if isinstance(access, Response):
+        return access
+    if not access.can_tag:
+        return PlainTextResponse("Tags are each person's own to edit", status_code=403)
     jid = request.path_params["jid"]
+    if not access.is_owner and jid not in await access.chat_db.list_allowed_jids():
+        # A viewer labels what was shared with them, not arbitrary chats.
+        return PlainTextResponse("Unknown chat", status_code=403)
     form = await request.form()
     tags = [t.strip() for t in _form_str(form, "tags").split(",") if t.strip()]
-    await _chat_db(request).upsert_chat_metadata(jid=jid, tags=tags)
+    await access.chat_db.upsert_chat_metadata(jid=jid, tags=tags)
     return _redirect_to_tab(jid)
 
 

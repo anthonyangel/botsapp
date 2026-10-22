@@ -112,6 +112,66 @@ class NavContext:
     is_admin: bool = True
     accounts: tuple[tuple[str, str], ...] = ()  # (id, label) the user can select
     account: str = ""
+    can_manage_session: bool = True  # owner of the selected account, or an admin
+
+
+@dataclass(frozen=True)
+class ChatView:
+    """How the Chats page is being used, set by its handler for the render.
+
+    ``for_viewer`` is empty when you are editing your own view; set to a
+    granted viewer's email when the account's owner is choosing what *that*
+    person can see (then the URLs carry ``?viewer=``). ``can_toggle`` is the
+    "Visible to MCP" switch, which only the account's owner has; ``can_tag`` is
+    editing your own tags."""
+
+    can_toggle: bool = True
+    can_tag: bool = True
+    for_viewer: str = ""
+    me: str = ""
+    owner: str = ""
+    viewers: tuple[str, ...] = ()  # the owner's choices: themself first, then grants
+
+
+_DEFAULT_CHAT_VIEW = ChatView()  # frozen, so safe as a shared default
+chat_view: ContextVar[ChatView] = ContextVar("admin_chat_view", default=_DEFAULT_CHAT_VIEW)
+
+
+def _chat_url(jid: str, op: str) -> str:
+    base = f"/chats/{html.escape(jid, quote=True)}/{op}"
+    viewer = chat_view.get().for_viewer
+    return f"{base}?viewer={html.escape(quote(viewer, safe='@'), quote=True)}" if viewer else base
+
+
+def _chat_header() -> str:
+    view = chat_view.get()
+    if view.viewers and len(view.viewers) > 1:
+        options = "".join(
+            f'<option value="{html.escape(v, quote=True)}"'
+            f"{' selected' if v == (view.for_viewer or view.me) else ''}>"
+            f"{html.escape(v)}{' (you)' if v == view.me else ''}</option>"
+            for v in view.viewers
+        )
+        who = view.for_viewer or view.me
+        note = (
+            "You are choosing what <b>" + html.escape(who) + "</b> can see on this account."
+            if view.for_viewer
+            else "These are the chats <b>you</b> can see. Pick someone to choose what they see."
+        )
+        return f"""
+    <p class="tab-note">
+      <label>Showing visibility for
+        <select aria-label="Viewer"
+                onchange="location.href='/chats?viewer='+encodeURIComponent(this.value)">
+          {options}</select></label><br>{note}
+    </p>"""
+    if not view.can_toggle:
+        return (
+            '<p class="tab-note">These are the chats '
+            f"<b>{html.escape(view.owner)}</b> has shared with you. You can label them for "
+            "yourself; only they can change what is shared.</p>"
+        )
+    return ""
 
 
 _DEFAULT_NAV = NavContext()  # frozen, so safe as a shared default
@@ -120,8 +180,10 @@ nav: ContextVar[NavContext] = ContextVar("admin_nav", default=_DEFAULT_NAV)
 
 def _nav_html() -> str:
     ctx = nav.get()
-    links = [
-        '<a class="mdl-navigation__link" href="/">Session</a>',
+    links = []
+    if ctx.can_manage_session:
+        links.append('<a class="mdl-navigation__link" href="/">Session</a>')
+    links += [
         '<a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>',
         '<a class="mdl-navigation__link" href="/accounts">Accounts</a>',
     ]
@@ -345,7 +407,8 @@ def not_connected_page(bridge_name: str = "") -> str:
 
 
 def _allow_toggle(jid: str, is_allowed: bool) -> str:
-    jid_attr = html.escape(jid, quote=True)
+    if not chat_view.get().can_toggle:
+        return '<span class="badge">Shared with you</span>'
     checkbox_id = f"allow-{abs(hash(jid))}"
     checked = "checked" if is_allowed else ""
     # onchange calls saveInBackground (see the page script) rather than
@@ -357,7 +420,7 @@ def _allow_toggle(jid: str, is_allowed: bool) -> str:
     # checkbox already shows its own new state the instant it's clicked,
     # natively, so there's nothing left to update once the save is fired.
     return f"""
-    <form class="allow-form" method="post" action="/chats/{jid_attr}/allow">
+    <form class="allow-form" method="post" action="{_chat_url(jid, "allow")}">
       <label class="mdl-checkbox mdl-js-checkbox mdl-js-ripple-effect" for="{checkbox_id}">
         <input type="checkbox" id="{checkbox_id}" class="mdl-checkbox__input"
                name="is_allowed" {checked} onchange="saveInBackground(this.form)">
@@ -413,13 +476,16 @@ def _metadata_form(jid: str, tags: list[str]) -> str:
     already use. No submit button: one would only ever do what Enter
     already does, and every other control on this form is button-free for
     the same reason."""
-    jid_attr = html.escape(jid, quote=True)
     field_id = abs(hash(jid))
     field_id_js = html.escape(str(field_id), quote=True)
     tags_str = ", ".join(tags)
+    if not chat_view.get().can_tag:
+        # Tags are each person's own labels; the owner choosing what someone
+        # else sees doesn't edit theirs.
+        return _tag_chips(tags, field_id)
     return f"""
     {_tag_chips(tags, field_id)}
-    <form class="meta-form" method="post" action="/chats/{jid_attr}/metadata">
+    <form class="meta-form" method="post" action="{_chat_url(jid, "metadata")}">
       <input type="hidden" id="tags-{field_id}" name="tags"
              value="{html.escape(tags_str, quote=True)}">
       <div class="mdl-textfield mdl-js-textfield">
@@ -693,6 +759,7 @@ def browse_page(
       </div>"""
 
     body = f"""
+    {_chat_header()}
     <p class="tab-note">
       Toggling "Visible to MCP" is the actual privacy boundary — Claude cannot see a
       chat, its messages, or its metadata until it's checked here.
@@ -1109,9 +1176,11 @@ _CARD_STYLE = "width:100%;max-width:560px;padding:16px 24px;margin-bottom:16px;"
 
 def _grant_row(account_id: str, email: str) -> str:
     aid = html.escape(quote(account_id, safe=""), quote=True)
+    chats_next = html.escape(quote(f"/chats?viewer={quote(email, safe='@')}", safe=""), quote=True)
     return f"""
       <li style="display:flex;align-items:center;gap:8px;">
         <span>{html.escape(email)}</span>
+        <a href="/accounts/{aid}/select?next={chats_next}">Choose chats</a>
         <form method="post" action="/accounts/{aid}/revoke"
               onsubmit="return confirm('Revoke access? They stop seeing this account at once.');">
           <input type="hidden" name="email" value="{html.escape(email, quote=True)}">
