@@ -55,7 +55,8 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   cookie); the Accounts and Users pages manage accounts, sharing and people.
   Needs `BOTSAPP_ADMIN_EMAIL`. Each account's MCP access can use its own read-only
   WAHA session key, stored encrypted ([0027](docs/decisions/0027-scoped-waha-session-keys.md);
-  needs `BOTSAPP_SECRET_KEY`; `WAHA_REQUIRE_SCOPED_KEYS` makes it mandatory). Open follow-ups (live WAHA/WorkOS verification,
+  needs `BOTSAPP_SECRET_KEY`; `WAHA_REQUIRE_SCOPED_KEYS` makes it mandatory); MCP tools carry WAHA action names as
+  tags and are only shown when a key allows them. Open follow-ups (live WAHA/WorkOS verification,
   per-account WAHA keys, tool visibility from key scopes, cleanup) are GitHub
   issues, summarised under "Where things stand" in 0025.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked

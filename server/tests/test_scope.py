@@ -137,3 +137,57 @@ async def test_a_missing_scoped_key_reads_as_not_ready_without_internals(
     message = str(excinfo.value)
     assert "isn't ready" in message and "administrator" in message
     assert "scoped" not in message.lower() and "ADMIN" not in message and "acct-" not in message
+
+
+# ── per-account check against the tool's required WAHA actions (#54) ─────────
+
+
+async def _keyed_registry(real_db, **keys: dict[str, bool]) -> None:
+    """Give accounts real (encrypted) keys with the given actions, and a registry
+    that can open them."""
+    from cryptography.fernet import Fernet
+
+    from botsapp.bridge_registry import BridgeRegistry
+    from botsapp.secretbox import SecretBox
+
+    box = SecretBox([Fernet.generate_key().decode()])
+    for account_id, actions in keys.items():
+        await real_db.set_account_key(account_id, f"key_{account_id}", box.encrypt("wk_s"), actions)
+    await state.registry.close()
+    state.registry = BridgeRegistry(real_db, "http://waha:3000", "ADMIN", box=box)
+
+
+@pytest.fixture
+def needs_read():
+    from botsapp.capabilities import required_actions
+
+    token = required_actions.set(frozenset({"read"}))
+    yield
+    required_actions.reset(token)
+
+
+async def test_the_account_actually_used_must_allow_what_the_tool_needs(
+    real_db, monkeypatch, needs_read
+):
+    await real_db.grant_account("default", HER)
+    await _keyed_registry(real_db, hers={"read": False}, default={"read": True})
+    _as(monkeypatch, HER)
+    with pytest.raises(ToolError, match="doesn't allow that"):
+        await resolve_scope("hers")  # her own account's key can't read
+    assert (await resolve_scope("default")).account_id == "default"
+
+
+async def test_a_single_account_lacking_the_action_is_refused_without_naming_internals(
+    real_db, monkeypatch, needs_read
+):
+    await _keyed_registry(real_db, hers={"read": False})
+    _as(monkeypatch, HER)
+    with pytest.raises(ToolError) as excinfo:
+        await resolve_scope(None)
+    assert "key_hers" not in str(excinfo.value) and "acct-" not in str(excinfo.value)
+
+
+async def test_with_no_requirement_set_nothing_is_checked(real_db, monkeypatch):
+    await _keyed_registry(real_db, hers={"read": False})
+    _as(monkeypatch, HER)
+    assert (await resolve_scope(None)).account_id == "hers"  # direct calls and local tools

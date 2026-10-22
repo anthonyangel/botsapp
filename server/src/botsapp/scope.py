@@ -27,7 +27,9 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 
 import botsapp.state as state
+from botsapp.bridge_factory import scoped_keys_required
 from botsapp.bridge_registry import ScopedKeyError
+from botsapp.capabilities import allows, missing, required_actions
 from botsapp.message_store import AllowlistedMessageStore
 
 if TYPE_CHECKING:
@@ -100,7 +102,8 @@ async def resolve_scope(account: str | None = None) -> Scope:
     db, registry = state.db, state.registry
     assert db is not None and registry is not None
     viewer = caller_email()
-    ids = [a["id"] for a in await db.list_accounts_for_user(viewer)]
+    accounts = await db.list_accounts_for_user(viewer)
+    ids = [a["id"] for a in accounts]
 
     if account is None:
         if not ids:
@@ -114,6 +117,21 @@ async def resolve_scope(account: str | None = None) -> Scope:
     elif account not in ids:
         raise ToolError(f"Unknown account '{account}'. Use list_accounts to see yours.")
 
+    # The middleware (tool_scopes.py) puts the WAHA actions this tool needs in a
+    # ContextVar; the listing check was a union, this is the account actually used.
+    required = required_actions.get()
+    if required:
+        chosen = next(a for a in accounts if a["id"] == account)
+        if not allows(chosen, required, strict=scoped_keys_required()):
+            logger.warning(
+                "account %s's key lacks %s",
+                account,
+                ", ".join(missing(chosen, required, strict=scoped_keys_required())),
+            )
+            raise ToolError(
+                "This WhatsApp account's access key doesn't allow that; "
+                "ask an administrator, or try another account (see list_accounts)."
+            )
     try:
         bridge = await registry.for_account(account, purpose="mcp")
     except ScopedKeyError as exc:

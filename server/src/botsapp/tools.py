@@ -72,6 +72,15 @@ MAX_INLINE_MEDIA_BYTES = 10 * 1024 * 1024
 # caller can tell machine-generated text from the original message.
 TRANSCRIPT_LABEL = "[Machine transcript (OpenAI speech-to-text), may contain errors] "
 
+# Tags (docs/decisions/0027, capabilities.py). The six WAHA action names -- read,
+# send, control, setting, app, delete -- are *reserved*: a tool tagged with one is
+# saying "this needs that action on the account's WAHA key", and is only presented
+# when a key allows it (tool_scopes.py). Every other tag is descriptive. A tool that
+# never touches WhatsApp carries none of them and is tagged "local". The blocked
+# outbound tools are labelled "send" only where it's unambiguous (the send_* tools);
+# which WAHA action the rest need is not documented (#47), and they stay blocked by
+# OUTBOUND_TAG regardless.
+#
 # Annotations advertised to clients so they can decide how much confirmation a
 # call needs. Chat/message/group content comes from WhatsApp (the "open
 # world"); tag metadata lives only in this server's own database.
@@ -226,7 +235,7 @@ class AccountInfo(BaseModel):
     is_owner: bool
 
 
-@mcp.tool(title="List accounts", tags={"read", "account"}, annotations=_READ_LOCAL)
+@mcp.tool(title="List accounts", tags={"account", "local"}, annotations=_READ_LOCAL)
 async def list_accounts() -> list[AccountInfo]:
     """List the WhatsApp accounts you can query.
 
@@ -398,7 +407,7 @@ async def search_messages(
 # ── Write tools (call the active bridge) ──────────────────────────────────────
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def send_message(to: str, text: str) -> dict[str, Any]:
     """Send a plain-text WhatsApp message.
 
@@ -417,7 +426,7 @@ async def send_message(to: str, text: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def send_media(to: str, media_url: str, media_type: str, caption: str = "") -> dict[str, Any]:
     """Send a media file via WhatsApp.
 
@@ -877,7 +886,7 @@ mcp.disable(names={"list_newsletters"})
 # ── Chat interactions ─────────────────────────────────────────────────────────
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def send_reaction(to: str, message_id: str, emoji: str) -> dict[str, Any]:
     """React to a WhatsApp message with an emoji.
 
@@ -950,7 +959,7 @@ async def delete_message(to: str, message_id: str, ctx: Context | None = None) -
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def send_location(
     to: str, latitude: float, longitude: float, name: str = ""
 ) -> dict[str, Any]:
@@ -973,7 +982,7 @@ async def send_location(
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def send_contact(to: str, name: str, vcard: str) -> dict[str, Any]:
     """Send a contact card via WhatsApp.
 
@@ -990,7 +999,7 @@ async def send_contact(to: str, name: str, vcard: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "group", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "group", OUTBOUND_TAG})
 async def send_poll(group_jid: str, question: str, options: list[str]) -> dict[str, Any]:
     """Send a poll to a WhatsApp group.
 
@@ -1031,7 +1040,9 @@ async def set_chat_presence(to: str, state_value: str, media: str = "") -> dict[
 # ── Chat metadata ────────────────────────────────────────────────────────
 
 
-@mcp.tool(title="Add chat tag", tags={"write", "metadata"}, annotations=_WRITE_LOCAL_IDEMPOTENT)
+@mcp.tool(
+    title="Add chat tag", tags={"edit", "metadata", "local"}, annotations=_WRITE_LOCAL_IDEMPOTENT
+)
 async def add_tag(jid: str, tag: str, account: str | None = None) -> TagResult:
     """Add a single tag to a chat, leaving its other tags untouched.
 
@@ -1063,7 +1074,9 @@ async def add_tag(jid: str, tag: str, account: str | None = None) -> TagResult:
         raise _fail("add_tag", exc) from exc
 
 
-@mcp.tool(title="Remove chat tag", tags={"write", "metadata"}, annotations=_WRITE_LOCAL_IDEMPOTENT)
+@mcp.tool(
+    title="Remove chat tag", tags={"edit", "metadata", "local"}, annotations=_WRITE_LOCAL_IDEMPOTENT
+)
 async def remove_tag(jid: str, tag: str, account: str | None = None) -> TagResult:
     """Remove a single tag from a chat, leaving its other tags untouched.
 
@@ -1089,7 +1102,9 @@ async def remove_tag(jid: str, tag: str, account: str | None = None) -> TagResul
         raise _fail("remove_tag", exc) from exc
 
 
-@mcp.tool(title="Clear chat tags", tags={"write", "metadata"}, annotations=_WRITE_LOCAL_IDEMPOTENT)
+@mcp.tool(
+    title="Clear chat tags", tags={"edit", "metadata", "local"}, annotations=_WRITE_LOCAL_IDEMPOTENT
+)
 async def clear_tags(jid: str, account: str | None = None) -> TagResult:
     """Remove every tag from a chat.
 
@@ -1111,7 +1126,7 @@ async def clear_tags(jid: str, account: str | None = None) -> TagResult:
         raise _fail("clear_tags", exc) from exc
 
 
-@mcp.tool(title="Get chat metadata", tags={"read", "metadata"}, annotations=_READ_LOCAL)
+@mcp.tool(title="Get chat metadata", tags={"metadata", "local"}, annotations=_READ_LOCAL)
 async def get_chat_metadata(jid: str, account: str | None = None) -> ChatMetadata:
     """Get tags for a chat.
 
@@ -1185,7 +1200,7 @@ def _media_content(mimetype: str, data: bytes, filename: str | None = None) -> I
     return file
 
 
-@mcp.tool(title="Get message media", tags={"read", "media"}, annotations=_READ_WHATSAPP)
+@mcp.tool(title="Get message media", tags={"read", "attachment"}, annotations=_READ_WHATSAPP)
 async def get_media(
     message_id: str, account: str | None = None
 ) -> Image | Audio | File | list[Image | Audio | File | str | ResourceLink]:

@@ -43,6 +43,11 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   (provision/rotate/verify/revoke: change WAHA, read it back, then record). The registry
   takes a required `purpose` (`"mcp"` = the account's scoped key, `"admin"` = the admin
   key) and fails closed under `WAHA_REQUIRE_SCOPED_KEYS`.
+- `capabilities.py` / `tool_scopes.py` — tool visibility from key scopes
+  ([0027](../docs/decisions/0027-scoped-waha-session-keys.md)): a tool's WAHA-action tags
+  (`read`, `send`, ...) are what it needs; `WahaScopeMiddleware` hides and refuses tools no
+  account's key can serve, and `resolve_scope` checks the specific account. Keep a tool's
+  tags honest: label WAHA-calling tools with the action, `local` ones with none.
 - `scope.py` — `resolve_scope(account)`: per tool call, caller email (token) +
   account → `Scope(bridge, ScopedChatDb, AllowlistedMessageStore)` bound to that
   (account, viewer). Every reachable tool must start with it; never read

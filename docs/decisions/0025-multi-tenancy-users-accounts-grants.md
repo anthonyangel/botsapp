@@ -4,7 +4,7 @@
 
 **Where things stand / what's left** (ideas and follow-ups live in GitHub issues, not in this file):
 - Live WAHA probe: multi-session, session keys, key updates, scope table — #47.
-- Per-account WAHA session keys, encrypted in the DB — implemented in [0027](0027-scoped-waha-session-keys.md) against a stub (#52), pending the live probe; showing MCP tools only when the key's scopes allow them — #54.
+- Per-account WAHA session keys, encrypted in the DB — implemented in [0027](0027-scoped-waha-session-keys.md) against a stub (#52), pending the live probe; showing MCP tools only when the key's scopes allow them — built (#54, section in 0027), same caveat.
 - WorkOS login and Users page exercised against a real environment — see "Not verified" in 0026.
 - Retire the legacy tables and single-tenant code — #53. Jinja2 for the admin templates — #55.
 - Runbook for turning the admin login on and onboarding a second person — #56.

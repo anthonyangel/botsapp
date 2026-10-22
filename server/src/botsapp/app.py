@@ -26,6 +26,7 @@ from botsapp.bridge_factory import (
 )
 from botsapp.db import DatabaseManager
 from botsapp.secretbox import SecretBox
+from botsapp.tool_scopes import WahaScopeMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -176,5 +177,5 @@ mcp = FastMCP(
     lifespan=lifespan,
     icons=[_WHATSAPP_ICON],
     auth=_build_auth(),
-    middleware=[AuthMiddleware(auth=_build_auth_checks())],
+    middleware=[AuthMiddleware(auth=_build_auth_checks()), WahaScopeMiddleware()],
 )

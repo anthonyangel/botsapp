@@ -1,6 +1,6 @@
 # 0027 — Per-account scoped WAHA session keys, encrypted in the database
 
-**Status:** Decided and implemented (2026-10) for #52, against a stubbed WAHA key API. **Not yet verified against a live WAHA** (#47): the key endpoints' field names, the scope each read call needs, and `PUT /api/keys` behaviour are documented-but-unchecked assumptions listed below. Tool visibility from key scopes is a separate follow-up (#54).
+**Status:** Decided and implemented (2026-10) for #52, against a stubbed WAHA key API. **Not yet verified against a live WAHA** (#47): the key endpoints' field names, the scope each read call needs, and `PUT /api/keys` behaviour are documented-but-unchecked assumptions listed below. Tool visibility from key scopes (#54) is described in its own section below and is built the same way (stubs, not live).
 
 ## Context
 
@@ -16,6 +16,17 @@ After [0025](0025-multi-tenancy-users-accounts-grants.md) every account has its 
 - **Store what WAHA reports.** `KeyManager` (`key_manager.py`) never trusts its request: after creating a key it reads it back and requires a non-admin key for that session with exactly the requested actions, then smoke-tests it (the session status call, which works before pairing) and deletes it again on any failure. Only then is it stored, and if storing fails the WAHA key is deleted. Rotation stores the new key before deleting the old one (a failed old-key delete is reported, not fatal). `verify` re-reads the key from WAHA, stores the actions it reports, and shows differences from policy as drift. `revoke` deletes in WAHA, then forgets.
 - **Admin UI (Accounts page, admins only):** creating an account also creates its key (undoing the session and row if that fails); each account shows its key state and offers *Create access key*, *Verify* and *Rotate*; deleting an account deletes its key first. Without a master key an account is still created, with a notice that it has no key.
 - **WAHA's own labels** are the only vocabulary (`WAHA_ACTIONS` in `waha_keys.py`); unknown action names WAHA reports are kept, logged, and count as drift.
+
+## Tool visibility from key scopes (#54)
+
+A tool is presented to the model, and callable, only when a WAHA key can serve it.
+
+- **WAHA's labels are the vocabulary; there is no mapping table.** A tool names what it needs by carrying WAHA's own action names as tags (`read`, `send`, `control`, `setting`, `app`, `delete`: `waha_keys.WAHA_ACTIONS`). Any other tag (`chat`, `group`, `metadata`, ...) is descriptive. A tool with none of the six needs nothing from WAHA; the ones that only touch our database (`list_accounts`, `add_tag`, `remove_tag`, `clear_tags`, `get_chat_metadata`) are tagged `local` and are always presented. `capabilities.py` holds the rule.
+- **`WahaScopeMiddleware` (`tool_scopes.py`), after FastMCP's own `AuthMiddleware`,** applies it in the same two places FastMCP applies auth checks. *Listing*: the caller's accounts are fetched once, and a tool is shown if at least one account's key allows every action its tags name; `tools/list` carries no `account` argument, so it is a union (exact when the caller has one account). *Calling*: the same rule is enforced ("not found or not authorized"), and the tool's required actions are placed in a `ContextVar` so `resolve_scope` can refuse the specific account the call is about if its own key lacks them. With no recorded requirement (direct calls, local tools) nothing extra is checked.
+- **What an account allows:** its stored key's actions (what WAHA reported, refreshed by *Verify*); with no key, everything while the shared admin key is the fallback, and nothing under `WAHA_REQUIRE_SCOPED_KEYS`. A caller who can't be identified gets only the local tools. stdio is left alone, as with FastMCP's own auth.
+- **Tag changes:** `write` became `send` on the `send_*` tools (all permanently blocked by `outbound`, which stays the authority); the other blocked tools keep `write` because which WAHA action they need isn't documented (#47 item 16). The descriptive `media` tag on `get_media` became `attachment` so it can't be mistaken for WAHA's separate "media" key. The tag tools' `write` became `edit`.
+- **Guard tests** (`tests/test_tool_scopes.py`): every reachable tool that calls WAHA names at least one action; the local-only tools (an explicit list) name none; anything tagged `send` is also `outbound`; every reachable read tool needs exactly `read`; the middleware is installed after `AuthMiddleware`; and it works inside a real FastMCP server.
+- **Limits.** The stored actions are advisory and WAHA is the enforcer: a stale copy can only make a tool look available and then fail at WAHA, or hide one that would work, never widen access. Clients fetch the tool list when they connect, so after pairing, a new key or a rotation a client may need to reconnect; `list_changed` notifications are not sent. That every reachable tool needs only `read` is our reading of the docs and is unconfirmed (#47 items 14 to 16).
 
 ## Alternatives considered
 
