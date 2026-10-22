@@ -13,6 +13,8 @@ import logging
 import os
 
 from botsapp.bridge import Bridge
+from botsapp.bridge_registry import BridgeRegistry
+from botsapp.db import DatabaseManager
 from botsapp.message_store import MessageStore
 from botsapp.waha_client import WAHAClient
 
@@ -32,3 +34,9 @@ def build_bridge_and_store() -> tuple[Bridge, MessageStore]:
 def bridge_provider_name() -> str:
     """The active provider's name, for display (e.g. the admin UI header)."""
     return "waha"
+
+
+def build_registry(db: DatabaseManager) -> BridgeRegistry:
+    """Per-account bridges (0025). Alongside, not instead of,
+    ``build_bridge_and_store``: tools move over to it in phase 3."""
+    return BridgeRegistry(db, os.environ["WAHA_URL"], os.environ["WAHA_API_KEY"])

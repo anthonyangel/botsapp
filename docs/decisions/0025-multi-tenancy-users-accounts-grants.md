@@ -74,7 +74,9 @@ grow per NOWEB session, so size the Fly machine before adding one.
 
 1. Schema + migration + tests (**done**: no behaviour change; email-allowlist
    methods now read `users`).
-2. WAHA multi-session probe; `BridgeRegistry` (account → `WAHAClient`).
+2. `BridgeRegistry` (account → its own `WAHAClient`/WAHA session) **done**, built
+   alongside the old single bridge and not yet used by tools. The live WAHA
+   multi-session probe is still to be run once against a real instance.
 3. Scoped enforcement (`Scope`, `list_accounts`, `account` arg) with adversarial
    isolation tests: search, `get_media`/message-id lookups, tags, Tigris key
    prefixes.

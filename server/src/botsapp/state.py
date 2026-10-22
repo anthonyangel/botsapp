@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from botsapp.bridge import Bridge
+    from botsapp.bridge_registry import BridgeRegistry
     from botsapp.db import DatabaseManager
     from botsapp.message_store import MessageStore
 
 db: DatabaseManager | None = None
 message_store: MessageStore | None = None
 bridge: Bridge | None = None
+registry: BridgeRegistry | None = None

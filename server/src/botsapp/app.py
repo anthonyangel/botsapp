@@ -18,7 +18,7 @@ from fastmcp.server.middleware import AuthMiddleware
 from mcp.types import Icon
 
 import botsapp.state as state
-from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store
+from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store, build_registry
 from botsapp.db import DatabaseManager
 from botsapp.message_store import AllowlistedMessageStore
 
@@ -99,14 +99,17 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
     # goes through the allowlist wrapper.
     bridge, raw_store = build_bridge_and_store()
     state.bridge = bridge
+    state.registry = build_registry(state.db)
     state.message_store = AllowlistedMessageStore(raw_store, state.db)
     logger.info("Bridge ready (%s)", bridge_provider_name())
 
     yield
 
     await state.bridge.close()
+    await state.registry.close()
     await state.db.close()
     state.db = None
+    state.registry = None
     state.message_store = None
     state.bridge = None
     logger.info("Shutdown complete")
