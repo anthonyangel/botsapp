@@ -16,7 +16,10 @@ from botsapp.message_store import AllowlistedMessageStore, ChatNotAllowedError
 
 @pytest.fixture
 def inner() -> AsyncMock:
-    return AsyncMock()
+    mock = AsyncMock()
+    # Real implementations fill in last_message; pass rows through untouched.
+    mock.with_last_messages = AsyncMock(side_effect=lambda chats: chats)
+    return mock
 
 
 @pytest.fixture
@@ -143,3 +146,14 @@ async def test_get_media_delegates_unfiltered(wrapped, inner):
     result = await wrapped.get_media(message_id="m1", chat_jid="other@g.us")
     assert result == {"data": b"abc", "mimetype": "image/jpeg", "filename": None}
     inner.get_media.assert_awaited_once_with(message_id="m1", chat_jid="other@g.us")
+
+
+async def test_last_message_enrichment_only_sees_allowed_page(wrapped, inner):
+    # Per-chat preview fetches are expensive and must never run for chats the
+    # allowlist hides, or for rows outside the requested page.
+    inner.get_chats.return_value = [
+        {"jid": "other@g.us", "name": "Hidden"},
+        {"jid": "allowed@g.us", "name": "Family"},
+    ]
+    await wrapped.get_chats(limit=50, offset=0)
+    inner.with_last_messages.assert_awaited_once_with([{"jid": "allowed@g.us", "name": "Family"}])

@@ -20,6 +20,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0016 — Bound WAHA media lifetime to 7 days; grow the deployed volume to 5GB](0016-bound-media-lifetime-and-grow-waha-volume.md) *(supersedes the media-persistence part of 0007)*
 - [0017 — Video/documents leave get_media() as a Tigris presigned link, not an embedded blob](0017-tigris-presigned-links-for-media.md)
 - [0018 — MCP spec conformance pass on the read tools](0018-mcp-spec-conformance-pass.md) *(amends 0017's return shape)*
+- [0019 — Map WAHA payloads as the NOWEB engine emits them](0019-noweb-aware-waha-mapping.md)
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 
