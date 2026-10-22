@@ -96,6 +96,20 @@ def _serialized_id(value: Any) -> str:
     return value or ""
 
 
+def _epoch_seconds(value: Any) -> Any:
+    """Unwrap a protobuf Long ({"low", "high"}) into a plain int.
+
+    NOWEB (Baileys) chat rows carry ``conversationTimestamp`` straight from
+    protobuf, which can serialize as a Long object rather than a number.
+    """
+    if isinstance(value, dict):
+        low, high = value.get("low"), value.get("high")
+        if isinstance(low, int) and isinstance(high, int):
+            return (high << 32) | (low & 0xFFFFFFFF)
+        return None
+    return value
+
+
 def _iso_timestamp(epoch_seconds: Any) -> str | None:
     """Normalize a raw WAHA Unix-epoch-seconds timestamp to an ISO-8601 UTC
     string.
@@ -103,6 +117,7 @@ def _iso_timestamp(epoch_seconds: Any) -> str | None:
     Without this, a "timestamp"/"last_message_at" field would be a raw
     epoch int rather than one unambiguous, caller-independent shape.
     """
+    epoch_seconds = _epoch_seconds(epoch_seconds)
     if not epoch_seconds:
         return None
     try:
@@ -135,9 +150,26 @@ _NON_MESSAGE_TYPES = frozenset(
 )
 
 
+# NOWEB (Baileys) messages have no ``type``; system noise shows up instead as a
+# non-zero ``messageStubType``, or as a message whose only content is protocol
+# plumbing (edits/revokes, key distribution, context info).
+_NOISE_CONTENT_KEYS = frozenset(
+    {"protocolMessage", "senderKeyDistributionMessage", "messageContextInfo"}
+)
+
+
 def _is_real_message(m: dict[str, Any]) -> bool:
-    msg_type = (m.get("_data") or {}).get("type")
-    return msg_type not in _NON_MESSAGE_TYPES
+    data = m.get("_data") or {}
+    # whatsapp-web.js engine (WEBJS)
+    if data.get("type") in _NON_MESSAGE_TYPES:
+        return False
+    # Baileys engine (NOWEB)
+    if data.get("messageStubType"):
+        return False
+    content = data.get("message")
+    if isinstance(content, dict) and content and set(content) <= _NOISE_CONTENT_KEYS:
+        return False
+    return True
 
 
 class WAHAClient:
@@ -909,8 +941,51 @@ class WAHAClient:
             # The chat's own "timestamp" (what sortBy=conversationTimestamp
             # sorts on) is more reliable than digging through lastMessage.
             # Normalized to ISO-8601 — see _iso_timestamp.
-            "last_message_at": _iso_timestamp(c.get("timestamp")),
+            # NOWEB (Baileys) chat rows have no "timestamp" — only
+            # conversationTimestamp / lastMessageRecvTimestamp.
+            "last_message_at": _iso_timestamp(
+                c.get("timestamp")
+                or c.get("conversationTimestamp")
+                or c.get("lastMessageRecvTimestamp")
+            ),
         }
+
+    # Cap on simultaneous per-chat requests in with_last_messages — WAHA is
+    # local, but a page of 200 chats shouldn't become 200 simultaneous calls.
+    _PREVIEW_CONCURRENCY = 10
+
+    async def with_last_messages(self, chats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Fill in ``last_message`` for chats whose /chats row didn't carry one.
+
+        WEBJS embeds the last message in each /chats row; NOWEB (Baileys)
+        doesn't, so it has to be fetched per chat. Done for one page at a
+        time by the caller, never for the whole chat list. A chat whose
+        latest real message is media (no caption text) stays None, same as
+        the WEBJS path.
+        """
+        missing = [c for c in chats if not c.get("last_message")]
+        if not missing:
+            return chats
+        gate = asyncio.Semaphore(self._PREVIEW_CONCURRENCY)
+
+        async def latest_text(jid: str) -> str | None:
+            async with gate:
+                try:
+                    messages = await self._get(
+                        f"/api/{self._session_name}/chats/{_to_waha_jid(jid)}/messages",
+                        params={"limit": "5", "offset": "0"},
+                    )
+                except Exception as exc:
+                    logger.debug("Could not fetch last message for %s: %s", jid, exc)
+                    return None
+            latest = next((m for m in messages or [] if _is_real_message(m)), None)
+            if latest is None or latest.get("hasMedia"):
+                return None
+            return latest.get("body") or None
+
+        texts = await asyncio.gather(*(latest_text(c["jid"]) for c in missing))
+        by_jid = {c["jid"]: text for c, text in zip(missing, texts, strict=True)}
+        return [{**c, "last_message": by_jid.get(c["jid"], c.get("last_message"))} for c in chats]
 
     async def _resolve_chat_name(self, jid: str) -> str:
         """Best-effort chat display name for a single jid.
@@ -976,7 +1051,9 @@ class WAHAClient:
         contact_names: dict[str, str] | None = None,
         lid_to_phone: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        from_jid = _from_waha_jid(m.get("from", ""))
+        # In a group, NOWEB's "from" is the group itself and the sender is in
+        # "participant" (WEBJS uses "author"); fall back to "from" for DMs.
+        from_jid = _from_waha_jid(m.get("participant") or m.get("author") or m.get("from", ""))
         # A @lid sender needs translating to its phone jid before a contact
         # lookup can match it at all — falls back to from_jid unchanged
         # when it's already phone-based, or the mapping is unknown.
