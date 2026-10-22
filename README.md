@@ -102,6 +102,16 @@ uv run ruff check src tests
 uv run ty check
 ```
 
+## Dependency updates
+
+[Renovate](https://docs.renovatebot.com/) opens PRs for Python (`uv.lock`), Docker
+images, and GitHub Actions, and tracks everything on the **Dependency Dashboard**
+issue. Config: `.github/renovate.json5`; runner: `.github/workflows/renovate.yml`
+(daily, plus on demand via *Run workflow* or by ticking a dashboard checkbox).
+It needs a `RENOVATE_TOKEN` repo secret — see
+[decision 0020](docs/decisions/0020-renovate-dependency-management.md). WAHA, the
+MCP stack and the Python version wait for a dashboard tick before a PR opens.
+
 ## Never expose `admin-ui` or `waha` publicly
 
 Both `docker-compose.yml` (loopback-only ports) and the eventual Fly.io
