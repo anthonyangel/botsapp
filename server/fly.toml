@@ -44,6 +44,10 @@ primary_region = "fra"
   # never a public URL. Update if the waha app is ever named differently.
   WAHA_URL = "http://botsapp-waha.internal:3000"
   WAHA_SESSION = "default"
+  # REQUIRED: the first admin's email (docs/decisions/0025). Owns the primary
+  # WhatsApp account; the pre-multi-tenancy allowlist/tags are adopted into it
+  # on first start. Left empty, nothing is visible to the MCP server.
+  BOTSAPP_ADMIN_EMAIL = ""
   LOG_LEVEL = "INFO"
   # This app's own public URL — must match whatever `fly apps create`
   # actually names it (https://<app-name>.fly.dev).

@@ -31,12 +31,20 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   [0004](../docs/decisions/0004-chat-allowlist-and-admin-ui.md). Raises
   `ChatNotAllowedError` (distinct from "no such chat") when a jid exists but
   isn't allowlisted.
+- `bridge_registry.py` — `BridgeRegistry`: one `WAHAClient` per `accounts` row (its own
+  WAHA session), built lazily; maps account → client, decides no authorization.
+  See [0025](../docs/decisions/0025-multi-tenancy-users-accounts-grants.md).
+- `scope.py` — `resolve_scope(account)`: per tool call, caller email (token) +
+  account → `Scope(bridge, ScopedChatDb, AllowlistedMessageStore)` bound to that
+  (account, viewer). Every reachable tool must start with it; never read
+  allowlist/tags straight from `state.db`.
 - `bridge_factory.py` — `build_bridge_and_store()`, the one place that
   constructs the bridge; both `app.py` and `admin/app.py` call it so
   construction can't drift between the two processes. One `WAHAClient`
   instance satisfies both the `Bridge` and `MessageStore` protocols.
-- `db.py` — `DatabaseManager`, SQLite (`aiosqlite`) for `chat_metadata`
-  (tags + `is_allowed`) only — not chat/message history, that's
+- `db.py` — `DatabaseManager`, SQLite (`aiosqlite`) for users, accounts, grants and
+  per-(account, viewer) `chat_access` (tags + `is_allowed`); legacy
+  `chat_metadata`/`allowed_emails` are no longer read — not chat/message history, that's
   `MessageStore`'s job. Shared file, WAL mode, read by both processes
   ([0007](../docs/decisions/0007-sqlite-for-metadata-store.md)).
 - `session.py` — WhatsApp session/QR pairing logic, called from both
@@ -55,7 +63,7 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   env var, see [0015](../docs/decisions/0015-email-allowlist-in-db.md)),
   `LOCAL_DEV_DISABLE_AUTH` escape hatch (dev only — does *not* relax the
   outbound-tag block).
-- `state.py` — module-level globals (`db`, `bridge`, `message_store`, `mcp`)
+- `state.py` — module-level globals (`db`, `bridge`, `registry`, `admin_chat_db`)
   set up in `app.py`'s lifespan; tools read through this rather than a
   request-scoped context.
 - `_authkit_issuer_workaround.py` — works around the open bug in

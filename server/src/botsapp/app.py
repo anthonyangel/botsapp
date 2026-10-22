@@ -20,7 +20,6 @@ from mcp.types import Icon
 import botsapp.state as state
 from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store, build_registry
 from botsapp.db import DatabaseManager
-from botsapp.message_store import AllowlistedMessageStore
 
 logger = logging.getLogger(__name__)
 
@@ -94,13 +93,12 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
         # (idempotent) — docs/decisions/0025.
         await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
 
-    # The admin UI talks to the raw store directly — it needs to see
-    # not-yet-allowed chats in order to allow them. Every other consumer
-    # goes through the allowlist wrapper.
-    bridge, raw_store = build_bridge_and_store()
+    # state.bridge is the default-session bridge, used only by the
+    # permanently blocked outbound tools. Everything reachable resolves a
+    # per-account, per-viewer view through state.registry (scope.py).
+    bridge, _ = build_bridge_and_store()
     state.bridge = bridge
     state.registry = build_registry(state.db)
-    state.message_store = AllowlistedMessageStore(raw_store, state.db)
     logger.info("Bridge ready (%s)", bridge_provider_name())
 
     yield
@@ -110,7 +108,6 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
     await state.db.close()
     state.db = None
     state.registry = None
-    state.message_store = None
     state.bridge = None
     logger.info("Shutdown complete")
 

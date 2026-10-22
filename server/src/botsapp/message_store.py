@@ -16,10 +16,7 @@ are built on.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Protocol
-
-if TYPE_CHECKING:
-    from botsapp.db import DatabaseManager
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +62,12 @@ class MessageStore(Protocol):
     async def get_media(self, message_id: str, chat_jid: str) -> dict[str, Any] | None: ...
 
 
+class AllowedJids(Protocol):
+    """Whatever supplies the visible jids: a per-(account, viewer) handle (scope.py)."""
+
+    async def list_allowed_jids(self) -> set[str]: ...
+
+
 class AllowlistedMessageStore:
     """Wraps any ``MessageStore`` so only allowlisted chats are ever visible.
 
@@ -86,7 +89,7 @@ class AllowlistedMessageStore:
 
     _FETCH_ALL = 10_000  # effectively "no limit" for a family-scale chat list
 
-    def __init__(self, inner: MessageStore, db: DatabaseManager) -> None:
+    def __init__(self, inner: MessageStore, db: AllowedJids) -> None:
         self._inner = inner
         self._db = db
 

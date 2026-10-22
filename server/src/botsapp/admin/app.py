@@ -32,6 +32,7 @@ from botsapp.admin import templates
 from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store
 from botsapp.db import DatabaseManager
 from botsapp.message_store import MessageStore
+from botsapp.scope import ScopedChatDb
 from botsapp.session import connect_or_get_status, get_status
 from botsapp.waha_client import WAHAClient
 
@@ -64,6 +65,12 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         # Adopts the single-tenant data as the first admin's primary account
         # (idempotent) — docs/decisions/0025.
         await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
+        # Until the multi-user admin UI (0025 phase 4), the admin operates as
+        # the first admin on the primary account — the same (account, viewer)
+        # an MCP call from that user resolves to.
+        state.admin_chat_db = ScopedChatDb(state.db, "default", admin_email.lower())
+    else:
+        logger.error("BOTSAPP_ADMIN_EMAIL is not set: chat allowlist/tag edits are disabled")
 
     bridge, raw_store = build_bridge_and_store()
     state.bridge = bridge
@@ -76,6 +83,7 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
     await state.db.close()
     state.db = None
     state.bridge = None
+    state.admin_chat_db = None
     _raw_store = None
 
 
@@ -178,7 +186,7 @@ async def session_delete(_request: Request) -> Response:
 
 async def chats_index(_request: Request) -> Response:
     assert state.bridge is not None
-    assert state.db is not None
+    assert state.admin_chat_db is not None
     assert _raw_store is not None
 
     session_status = await get_status(state.bridge)
@@ -209,7 +217,7 @@ async def chats_index(_request: Request) -> Response:
         jid = chat["jid"]
         contact = contacts.get(jid)
         display_name = (contact.name if contact else None) or chat.get("name") or jid
-        meta = await state.db.get_chat_metadata(jid=jid) or {}
+        meta = await state.admin_chat_db.get_chat_metadata(jid=jid) or {}
         direct_rows.append(
             {
                 "jid": jid,
@@ -233,7 +241,7 @@ async def chats_index(_request: Request) -> Response:
     newsletter_rows: list[dict[str, Any]] = []
     for chat, avatar in zip(newsletter_chats, newsletter_avatars, strict=True):
         jid = chat["jid"]
-        meta = await state.db.get_chat_metadata(jid=jid) or {}
+        meta = await state.admin_chat_db.get_chat_metadata(jid=jid) or {}
         newsletter_rows.append(
             {
                 "jid": jid,
@@ -287,7 +295,7 @@ async def chats_index(_request: Request) -> Response:
     )
     group_rows: list[dict[str, Any]] = []
     for g, avatar in zip(regular_groups, group_avatars, strict=True):
-        meta = await state.db.get_chat_metadata(jid=g.jid) or {}
+        meta = await state.admin_chat_db.get_chat_metadata(jid=g.jid) or {}
         group_rows.append(
             {
                 "jid": g.jid,
@@ -306,7 +314,7 @@ async def chats_index(_request: Request) -> Response:
     )
     community_rows: list[dict[str, Any]] = []
     for g, avatar in zip(community_groups, community_avatars, strict=True):
-        meta = await state.db.get_chat_metadata(jid=g.jid) or {}
+        meta = await state.admin_chat_db.get_chat_metadata(jid=g.jid) or {}
         community_rows.append(
             {
                 "jid": g.jid,
@@ -320,7 +328,7 @@ async def chats_index(_request: Request) -> Response:
 
     status_row = None
     if status_seen:
-        meta = await state.db.get_chat_metadata(jid=STATUS_BROADCAST_JID) or {}
+        meta = await state.admin_chat_db.get_chat_metadata(jid=STATUS_BROADCAST_JID) or {}
         status_row = {
             "jid": STATUS_BROADCAST_JID,
             "is_allowed": bool(meta.get("is_allowed")),
@@ -367,11 +375,11 @@ def _redirect_to_tab(jid: str) -> RedirectResponse:
 
 
 async def toggle_allowed(request: Request) -> Response:
-    assert state.db is not None
+    assert state.admin_chat_db is not None
     jid = request.path_params["jid"]
     form = await request.form()
     is_allowed = form.get("is_allowed") == "on"
-    await state.db.set_chat_allowed(jid=jid, is_allowed=is_allowed)
+    await state.admin_chat_db.set_chat_allowed(jid=jid, is_allowed=is_allowed)
     return _redirect_to_tab(jid)
 
 
@@ -384,11 +392,11 @@ def _form_str(form: FormData, key: str) -> str:
 
 
 async def save_metadata(request: Request) -> Response:
-    assert state.db is not None
+    assert state.admin_chat_db is not None
     jid = request.path_params["jid"]
     form = await request.form()
     tags = [t.strip() for t in _form_str(form, "tags").split(",") if t.strip()]
-    await state.db.upsert_chat_metadata(jid=jid, tags=tags)
+    await state.admin_chat_db.upsert_chat_metadata(jid=jid, tags=tags)
     return _redirect_to_tab(jid)
 
 

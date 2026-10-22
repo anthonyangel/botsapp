@@ -50,9 +50,8 @@ def client(monkeypatch):
         state.bridge.get_contacts.return_value = []
         state.bridge.list_groups.return_value = []
         state.bridge.get_avatar_url.return_value = None
-        state.db.get_chat_metadata = AsyncMock(return_value=None)
-        state.db.set_chat_allowed = AsyncMock()
-        state.db.upsert_chat_metadata = AsyncMock()
+        state.admin_chat_db = AsyncMock()
+        state.admin_chat_db.get_chat_metadata.return_value = None
         state.db.list_allowed_emails = AsyncMock(return_value=[])
         state.db.add_allowed_email = AsyncMock()
         state.db.remove_allowed_email = AsyncMock()
@@ -155,7 +154,7 @@ def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
     state.bridge.get_contacts.return_value = [
         ContactInfo(jid="155@s.whatsapp.net", name="Bob Smith", phone_number="155"),
     ]
-    state.db.get_chat_metadata = AsyncMock(return_value={"is_allowed": True, "tags": ["family"]})
+    state.admin_chat_db.get_chat_metadata.return_value = {"is_allowed": True, "tags": ["family"]}
     r = client.get("/chats")
     assert r.status_code == 200
     assert "Bob Smith" in r.text
@@ -305,7 +304,7 @@ def test_toggle_allowed_on(client):
     # belongs to (a group here) — not always Chats, or ticking a checkbox
     # on the Groups tab flips the page back to Chats underneath the user.
     assert r.headers["location"] == "/chats#groups-panel"
-    state.db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=True)
+    state.admin_chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=True)
 
 
 def test_toggle_allowed_redirects_to_chats_tab_for_direct_chat(client):
@@ -337,7 +336,7 @@ def test_toggle_allowed_redirects_to_status_tab(client):
 def test_toggle_allowed_off_when_unchecked(client):
     # An unchecked checkbox simply isn't submitted — no "is_allowed" key at all.
     client.post("/chats/g1@g.us/allow", data={}, follow_redirects=False)
-    state.db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=False)
+    state.admin_chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=False)
 
 
 def test_save_metadata_parses_comma_separated_tags(client):
@@ -348,12 +347,14 @@ def test_save_metadata_parses_comma_separated_tags(client):
     )
     assert r.status_code == 303
     assert r.headers["location"] == "/chats#groups-panel"
-    state.db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=["family", "core"])
+    state.admin_chat_db.upsert_chat_metadata.assert_awaited_once_with(
+        jid="g1@g.us", tags=["family", "core"]
+    )
 
 
 def test_save_metadata_empty_tags(client):
     client.post("/chats/g1@g.us/metadata", data={"tags": ""}, follow_redirects=False)
-    state.db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])
+    state.admin_chat_db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])
 
 
 # ── /access — email allowlist (docs/decisions/0015-email-allowlist-in-db.md) ─

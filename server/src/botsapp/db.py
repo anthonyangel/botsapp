@@ -291,6 +291,8 @@ class DatabaseManager:
         self, account_id: str, viewer_email: str, jid: str
     ) -> dict[str, Any] | None:
         viewer = self._normalize_email(viewer_email)
+        if not await self.has_account_access(account_id, viewer):
+            return None
         row = await queries.get_chat_access(
             self.connection, account_id=account_id, viewer_email=viewer, jid=jid
         )

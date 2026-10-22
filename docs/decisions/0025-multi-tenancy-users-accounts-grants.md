@@ -1,6 +1,6 @@
 # 0025 — Multi-tenancy: users, accounts, grants, per-viewer chat access
 
-**Status:** Decided (2026-10); phase 1 (schema + migration) implemented, later phases planned below.
+**Status:** Decided (2026-10); phases 1–3 implemented (schema, bridge registry, scoped MCP enforcement), phases 4–5 planned below.
 
 ## Context
 
@@ -77,16 +77,27 @@ grow per NOWEB session, so size the Fly machine before adding one.
 2. `BridgeRegistry` (account → its own `WAHAClient`/WAHA session) **done**, built
    alongside the old single bridge and not yet used by tools. The live WAHA
    multi-session probe is still to be run once against a real instance.
-3. Scoped enforcement (`Scope`, `list_accounts`, `account` arg) with adversarial
-   isolation tests: search, `get_media`/message-id lookups, tags, Tigris key
-   prefixes.
+3. Scoped enforcement **done**. Every reachable tool starts with
+   `scope.resolve_scope(account)`: caller email from the token, account from the
+   `account` argument (implicit when the caller has exactly one; an account the
+   caller doesn't hold gets the same "Unknown account" error as a missing one),
+   then a per-request bridge, `ScopedChatDb` and `AllowlistedMessageStore` bound
+   to (account, viewer). New `list_accounts` tool. `state.message_store` is gone;
+   `state.bridge` remains only for the permanently blocked outbound tools. The
+   admin UI now reads and writes `chat_access` as the first admin on the `default`
+   account. `chat_metadata` is no longer read or written (left in place, as with
+   `allowed_emails`). Tigris keys already carry a random UUID and a 15-minute
+   lifetime, so no per-account prefix was added.
 4. Admin auth decision record, then the two admin surfaces.
 5. Onboard the second user.
 
 ## Consequences
 
-- Until phase 3 the MCP server still enforces the old global allowlist; the new
-  tables are written only by bootstrap and not yet consulted by tools.
+- **Deploy requirement:** `BOTSAPP_ADMIN_EMAIL` must be set on both processes
+  (Fly: `[env]` or `fly secrets`) before this ships, or nothing is visible and the
+  admin UI's chat edits are disabled. First start copies the old allowlist/tags
+  into that user's `chat_access`; edits after that are not mirrored back.
+- The admin UI still has no login and operates as the first admin until phase 4.
 - Removing a user who owns an account is refused; transfer/delete the account first.
 - Same-jid chats across accounts are independent rows (keyed by account).
 - Operating the admin UI as the sole admin means the admin can see a paired
