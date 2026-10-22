@@ -20,8 +20,15 @@ fetched from the review environment; this is based on the spec as known.)
 - **Annotations + titles** on every reachable tool: reads are
   `readOnlyHint`; `add_tag`/`remove_tag`/`clear_tags` are non-destructive and
   idempotent. Chat/message/group reads are `openWorldHint=True`.
-- **Typed return shapes** (TypedDicts) so each tool advertises a real
-  `outputSchema`. Not validated at runtime.
+- **Pydantic return models** so each tool advertises a real `outputSchema`
+  and bridge/DB rows are validated at the tool boundary (a malformed row
+  becomes a `ToolError`, not a bad payload). Chosen over TypedDict (no
+  validation), dataclasses (no schema/alias advantage) and msgspec (FastMCP
+  builds schemas with Pydantic). `Message.from_` is serialized as `from`, and
+  `serialize_by_alias` keeps the schema in step with the wire format. The
+  models follow what `waha_client` really emits — e.g. chats have no `id` or
+  `unread_count`, and message `text`/`timestamp` can be null; the old
+  docstrings claimed otherwise.
 - **Pagination contract changed:** `list_chats`, `list_messages` and
   `search_messages` return `{items, next_offset}` (fetching limit+1 to know
   whether more exist) instead of a bare list. The `tags` branch of
