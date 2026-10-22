@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -311,7 +311,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "aresponses", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "boto3", specifier = ">=1.43.117" },
-    { name = "fastmcp", specifier = ">=3.0.2" },
+    { name = "fastmcp", specifier = ">=4.0" },
     { name = "phonenumbers", specifier = ">=9.0.41" },
     { name = "pydantic", specifier = ">=2.14.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.1" },

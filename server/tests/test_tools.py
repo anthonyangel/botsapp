@@ -8,17 +8,21 @@ WAHAClient implements).
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Audio, File, Image
-from mcp.types import ResourceLink
+from mcp.types import ElicitRequestFormParams, InputRequiredResult, ResourceLink
 
 from botsapp.bridge import GroupInfo, SendResult
 from botsapp.message_store import ChatNotAllowedError
 from botsapp.tools import (
+    MAX_GROUP_CHOICES,
+    GroupChoice,
     add_tag,
+    choose_group,
     clear_tags,
     create_group,
     delete_message,
@@ -1249,6 +1253,7 @@ async def test_reachable_tools_advertise_annotations_and_output_schema():
         "search_messages",
         "get_group_info",
         "list_groups",
+        "choose_group",
         "list_communities",
         "get_chat_metadata",
         "get_media",
@@ -1272,3 +1277,177 @@ async def test_message_page_output_schema_uses_from_alias():
     assert schema is not None
     message = schema["$defs"]["Message"]["properties"]
     assert "from" in message and "from_" not in message
+
+
+# ── choose_group (interactive picker, MCP 2026-07-28) ────────────────────
+
+
+def _answer(group: str | None, action: str = "accept"):
+    """The client's reply to the picker, as the tool sees it in ctx.input_responses."""
+    content = {"group": group} if group is not None else None
+    return {"group": SimpleNamespace(action=action, content=content)}
+
+
+def _ctx(answers=None):
+    return SimpleNamespace(input_responses=answers)
+
+
+def _choice(result: object) -> GroupChoice:
+    """Narrow choose_group's GroupChoice | InputRequiredResult to the final answer."""
+    assert isinstance(result, GroupChoice)
+    return result
+
+
+def _picker_options(result: object) -> list[dict]:
+    """The picker's options from a choose_group result that asked a question."""
+    assert isinstance(result, InputRequiredResult)
+    assert result.input_requests is not None
+    params = result.input_requests["group"].params
+    assert isinstance(params, ElicitRequestFormParams)
+    return params.requested_schema["properties"]["group"]["oneOf"]
+
+
+async def test_choose_group_returns_a_single_match_without_asking(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [_group("a@g.us", "Family"), _group("b@g.us", "Work")]
+    result = _choice(await choose_group(query="fam", ctx=_ctx()))
+    assert result.status == "selected"
+    assert result.group is not None and result.group.jid == "a@g.us"
+
+
+async def test_choose_group_with_no_match(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [_group("a@g.us", "Family")]
+    result = _choice(await choose_group(query="nothing", ctx=_ctx()))
+    assert result.status == "no_match"
+
+
+async def test_choose_group_asks_when_several_match(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family chat", participant_count=7),
+        _group("b@g.us", "Family trip", participant_count=5),
+        _group("c@g.us", "Work"),
+    ]
+    result = await choose_group(query="family", ctx=_ctx())
+    assert isinstance(result, InputRequiredResult)
+    assert _picker_options(result) == [
+        {"const": "a@g.us", "title": "Family chat · 7 members"},
+        {"const": "b@g.us", "title": "Family trip · 5 members"},
+        {"const": "__none__", "title": "None of these"},
+    ]
+
+
+async def test_choose_group_never_offers_hidden_groups_or_communities(
+    mock_bridge: AsyncMock, mock_db: AsyncMock
+):
+    mock_db.list_allowed_jids.return_value = {"a@g.us", "b@g.us", "comm@g.us"}
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+        _group("secret@g.us", "Family secret"),  # not allowlisted
+        _group("comm@g.us", "Family community", is_community=True),
+    ]
+    result = await choose_group(query="family", ctx=_ctx())
+    offered = {o["const"] for o in _picker_options(result)}
+    assert offered == {"a@g.us", "b@g.us", "__none__"}
+
+
+async def test_choose_group_asks_user_to_narrow_when_too_many_match(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group(f"{i}@g.us", f"Group {i}") for i in range(MAX_GROUP_CHOICES + 1)
+    ]
+    result = _choice(await choose_group(query="group", ctx=_ctx()))
+    assert result.status == "too_many"
+
+
+async def test_choose_group_resolves_the_users_pick(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    result = _choice(await choose_group(query="family", ctx=_ctx(_answer("b@g.us"))))
+    assert result.status == "selected"
+    assert result.group is not None and result.group.jid == "b@g.us"
+
+
+async def test_choose_group_declined_or_none_of_these_is_not_guessed(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    declined = _choice(
+        await choose_group(query="family", ctx=_ctx(_answer(None, action="decline")))
+    )
+    none = _choice(await choose_group(query="family", ctx=_ctx(_answer("__none__"))))
+    assert declined.status == "cancelled" and declined.group is None
+    assert none.status == "none_chosen" and none.group is None
+
+
+async def test_choose_group_rejects_a_forged_or_stale_selection(
+    mock_bridge: AsyncMock, mock_db: AsyncMock
+):
+    # The answer comes from the client: a jid that isn't among the current matches
+    # (hidden group, or one that vanished between rounds) must not resolve.
+    mock_db.list_allowed_jids.return_value = {"a@g.us", "b@g.us"}
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+        _group("secret@g.us", "Family secret"),
+    ]
+    result = _choice(await choose_group(query="family", ctx=_ctx(_answer("secret@g.us"))))
+    assert result.status == "stale" and result.group is None
+
+
+async def test_choose_group_sanitizes_picker_labels(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Evil\x00\x1b[31m   name\n" + "x" * 200),
+        _group("b@g.us", "Other evil"),
+    ]
+    result = await choose_group(query="evil", ctx=_ctx())
+    title = _picker_options(result)[0]["title"]
+    assert "\x00" not in title and "\x1b" not in title and "\n" not in title
+    assert len(title) < 100
+
+
+async def test_choose_group_runs_the_full_picker_loop_over_the_modern_protocol(
+    mock_bridge: AsyncMock,
+):
+    # Real client <-> server round trip on 2026-07-28 (in memory): ask, answer, resolve.
+    from fastmcp import Client, FastMCP
+    from fastmcp.client.elicitation import ElicitResult
+
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family chat"),
+        _group("b@g.us", "Family trip"),
+    ]
+    server = FastMCP("test")
+    server.add_tool(choose_group)
+
+    asked = {}
+
+    async def pick_second(message, response_type, params, ctx):
+        asked["options"] = params.requested_schema["properties"]["group"]["oneOf"]
+        return ElicitResult(action="accept", content=response_type(group="b@g.us"))
+
+    async with Client(server, mode="auto", elicitation_handler=pick_second) as client:
+        assert client.protocol_version == "2026-07-28"
+        result = await client.call_tool("choose_group", {"query": "family"})
+
+    assert [o["const"] for o in asked["options"]] == ["a@g.us", "b@g.us", "__none__"]
+    assert result.data.status == "selected"
+    assert result.data.group.jid == "b@g.us"
+
+
+async def test_choose_group_errors_clearly_on_a_handshake_era_connection(
+    mock_bridge: AsyncMock,
+):
+    from fastmcp import Client, FastMCP
+
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    server = FastMCP("test")
+    server.add_tool(choose_group)
+
+    async with Client(server, mode="legacy") as client:
+        with pytest.raises(Exception, match="2026-07-28"):
+            await client.call_tool("choose_group", {"query": "family"})
