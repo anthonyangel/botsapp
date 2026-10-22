@@ -42,6 +42,10 @@ class MessageStore(Protocol):
 
     async def get_chat(self, jid: str) -> dict[str, Any] | None: ...
 
+    async def with_last_messages(self, chats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Fill in ``last_message`` for chat rows that lack it (engine-dependent)."""
+        ...
+
     async def list_messages(
         self, jid: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]: ...
@@ -97,11 +101,18 @@ class AllowlistedMessageStore:
         allowed = await self._allowed()
         rows = await self._inner.get_chats(limit=self._FETCH_ALL, offset=0)
         filtered = [r for r in rows if r["jid"] in allowed]
-        return filtered[offset : offset + limit]
+        return await self._inner.with_last_messages(filtered[offset : offset + limit])
 
     async def get_chat(self, jid: str) -> dict[str, Any] | None:
         await self._require_allowed(jid)
-        return await self._inner.get_chat(jid)
+        chat = await self._inner.get_chat(jid)
+        if chat is None:
+            return None
+        return (await self._inner.with_last_messages([chat]))[0]
+
+    async def with_last_messages(self, chats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Only ever called with rows that already passed the allowlist above.
+        return await self._inner.with_last_messages(chats)
 
     async def list_messages(
         self, jid: str, limit: int = 50, offset: int = 0
@@ -134,7 +145,7 @@ class AllowlistedMessageStore:
         allowed = await self._allowed()
         rows = await self._inner.search_chats(query=query, limit=self._FETCH_ALL, offset=0)
         filtered = [r for r in rows if r["jid"] in allowed]
-        return filtered[offset : offset + limit]
+        return await self._inner.with_last_messages(filtered[offset : offset + limit])
 
     async def get_message_chat_jid(self, message_id: str) -> str | None:
         # Deliberately unfiltered, unlike every other method here: the
