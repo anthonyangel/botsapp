@@ -16,7 +16,7 @@ primary_region = "fra"
   # a real deploy failure ("does not support amd64 architecture for linux
   # os") before landing on this tag — the arm-tag QR-pairing bug that note
   # describes is specific to the `arm` tag, not this one.
-  image = "devlikeapro/waha:dev"
+  image = "devlikeapro/waha:dev@sha256:bd2af2d33ea51e18e882f8bf2db65c6b33684fd11d490b6f7e30228f5e8ea82d"
 
 [[mounts]]
   # One volume, not two: a Fly Machine only supports a single volume mount

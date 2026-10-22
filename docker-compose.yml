@@ -26,7 +26,7 @@ services:
     # `dev-arm` directly. Re-check whether a newer stable tag has picked up
     # the fix before moving off `dev-arm`. Override
     # to a non-`-arm` tag for typical x86_64 deployment hosts.
-    image: ${WAHA_IMAGE:-devlikeapro/waha:dev-arm}
+    image: ${WAHA_IMAGE:-devlikeapro/waha:dev-arm@sha256:41a19f208f6656d2e63a8d137609a710637f4df60653361e6ff2eba95ef9a75f}
     shm_size: "2gb"  # headless Chromium needs real /dev/shm or it crashes
     environment:
       WHATSAPP_DEFAULT_ENGINE: WEBJS
