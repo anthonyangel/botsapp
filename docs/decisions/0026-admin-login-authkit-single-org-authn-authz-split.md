@@ -1,6 +1,6 @@
 # 0026 — Admin login via AuthKit, one WorkOS organization, and the authn/authz split
 
-**Status:** Decided (2026-10); not yet implemented — tracked in #48 (login), #49 (users page), #50 (accounts/grants pages), #51 (self-service), #52 (scoped WAHA keys).
+**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Still to do: #49 (users page), #50 (accounts/grants pages), #51 (self-service), #52 (scoped WAHA keys).
 
 ## Context
 
@@ -62,6 +62,16 @@ What WorkOS can express was checked against its own docs ([FGA](https://workos.c
 - New secrets for the admin process only: a WorkOS API key and client credentials. The org id and extra redirect URI go through `workos/apply.sh`.
 - `docker-compose.yml`, `server/fly.toml`, the README and the root `CLAUDE.md` architecture table ("private only, always — no login of its own") must be updated by the implementing PR, not now, since nothing here is live yet.
 - Per-account WAHA session keys ([#52](https://github.com/anthonyangel/botsapp/issues/52)) are a separate decision (stored encrypted in the DB under `BOTSAPP_SECRET_KEY`, not in Fly secrets, because setting a Fly secret restarts the machine). Record it as 0027 when that work starts.
+
+## As built (#48)
+
+- `AuthKitClient` protocol with `WorkOSAuthKitClient` (authorize redirect + `POST /user_management/authenticate` code exchange) and a test stub. Optional `WORKOS_ORG_ID` restricts sign-in to the one org.
+- Signed (HMAC) `SameSite=Lax`, HTTP-only, `Secure`-on-https session cookie holding only the email; 8 h lifetime. Role and `users` row are looked up per request, so removal or demotion applies on the next click even before the cookie expires.
+- State cookie + nonce on `/login` → `/auth/callback`; `next` is restricted to same-site relative paths.
+- CSRF: `SameSite=Lax` plus a required matching `Origin`/`Referer` on every state-changing request. The existing hand-rolled forms carry no token.
+- Policy: `/access` admins only; `/` and `/session/*` the account's owner or an admin; `/chats*` anyone holding the account. Until the per-account pages (#51) all of these act on the `default` account.
+- Fails closed: unconfigured login stops the admin process at startup. Explicit opt-outs: `LOCAL_DEV_DISABLE_AUTH` (shared with the MCP server, local dev) and `ADMIN_DISABLE_AUTH` (admin UI only, for a deployment still reachable by nobody but the owner). The Fly entrypoint backgrounds the admin process, so a refusal to start is silent to health checks; check the logs after deploying.
+- Not yet verified: that the authenticate response carries `organization_id` and `email_verified` as assumed, and the `organization_id` authorize parameter.
 
 ## Open check before implementing
 

@@ -16,6 +16,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import botsapp.admin.app as admin_app
+import botsapp.admin.auth as admin_auth
 import botsapp.state as state
 from botsapp.bridge import ContactInfo, GroupInfo, SessionStatus
 from botsapp.db import DatabaseManager
@@ -41,6 +42,11 @@ def client(monkeypatch):
     monkeypatch.setenv("WAHA_URL", "http://fake")
     monkeypatch.setenv("WAHA_API_KEY", "fake-key")
 
+    dev_config = admin_auth.AdminAuthConfig(
+        client=None, secret=b"", base_url="", dev_user="admin@example.com"
+    )
+    monkeypatch.setattr(admin_auth, "config_from_env", lambda: dev_config)
+
     with TestClient(admin_app.app) as c:
         # Replace the real bridge the lifespan built with a mock, and give
         # the module its own fake unfiltered store — same idea as
@@ -50,8 +56,15 @@ def client(monkeypatch):
         state.bridge.get_contacts.return_value = []
         state.bridge.list_groups.return_value = []
         state.bridge.get_avatar_url.return_value = None
-        state.admin_chat_db = AsyncMock()
-        state.admin_chat_db.get_chat_metadata.return_value = None
+        # Sign in as an admin who owns the default account (auth is covered
+        # in test_admin_auth.py); chat_db stands in for the per-viewer handle.
+        state.db.get_user = AsyncMock(return_value={"email": "admin@example.com", "is_admin": True})
+        state.db.get_account = AsyncMock(return_value={"owner_email": "admin@example.com"})
+        state.db.has_account_access = AsyncMock(return_value=True)
+        chat_db = AsyncMock()
+        chat_db.get_chat_metadata.return_value = None
+        monkeypatch.setattr(admin_app, "_chat_db", lambda _request: chat_db)
+        c.chat_db = chat_db
         state.db.list_allowed_emails = AsyncMock(return_value=[])
         state.db.add_allowed_email = AsyncMock()
         state.db.remove_allowed_email = AsyncMock()
@@ -154,7 +167,7 @@ def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
     state.bridge.get_contacts.return_value = [
         ContactInfo(jid="155@s.whatsapp.net", name="Bob Smith", phone_number="155"),
     ]
-    state.admin_chat_db.get_chat_metadata.return_value = {"is_allowed": True, "tags": ["family"]}
+    client.chat_db.get_chat_metadata.return_value = {"is_allowed": True, "tags": ["family"]}
     r = client.get("/chats")
     assert r.status_code == 200
     assert "Bob Smith" in r.text
@@ -304,7 +317,7 @@ def test_toggle_allowed_on(client):
     # belongs to (a group here) — not always Chats, or ticking a checkbox
     # on the Groups tab flips the page back to Chats underneath the user.
     assert r.headers["location"] == "/chats#groups-panel"
-    state.admin_chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=True)
+    client.chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=True)
 
 
 def test_toggle_allowed_redirects_to_chats_tab_for_direct_chat(client):
@@ -336,7 +349,7 @@ def test_toggle_allowed_redirects_to_status_tab(client):
 def test_toggle_allowed_off_when_unchecked(client):
     # An unchecked checkbox simply isn't submitted — no "is_allowed" key at all.
     client.post("/chats/g1@g.us/allow", data={}, follow_redirects=False)
-    state.admin_chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=False)
+    client.chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=False)
 
 
 def test_save_metadata_parses_comma_separated_tags(client):
@@ -347,14 +360,14 @@ def test_save_metadata_parses_comma_separated_tags(client):
     )
     assert r.status_code == 303
     assert r.headers["location"] == "/chats#groups-panel"
-    state.admin_chat_db.upsert_chat_metadata.assert_awaited_once_with(
+    client.chat_db.upsert_chat_metadata.assert_awaited_once_with(
         jid="g1@g.us", tags=["family", "core"]
     )
 
 
 def test_save_metadata_empty_tags(client):
     client.post("/chats/g1@g.us/metadata", data={"tags": ""}, follow_redirects=False)
-    state.admin_chat_db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])
+    client.chat_db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])
 
 
 # ── /access — email allowlist (docs/decisions/0015-email-allowlist-in-db.md) ─

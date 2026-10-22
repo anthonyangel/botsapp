@@ -3,9 +3,11 @@ Admin UI Starlette app.
 
 Runs as its own process (botsapp.admin_main:app), independent of the
 public MCP server (botsapp.main:app) — they share only the SQLite
-chat_metadata database and WAHA's own storage, never a Python process. No
-auth of its own: network-private reachability is the only gate. Never give
-this app a public Fly service / public docker-compose port binding.
+chat_metadata database and WAHA's own storage, never a Python process.
+Every route except the login ones sits behind admin/auth.py's AuthKit login
+(docs/decisions/0026); only LOCAL_DEV_DISABLE_AUTH turns that off, for local
+development. Until the per-account pages land (#51) these pages operate on the
+``default`` account.
 
 Uses state.bridge + the raw MessageStore from bridge_factory, same as the
 MCP server. The active provider is shown in the page header so it's never
@@ -13,6 +15,7 @@ ambiguous which one you're looking at.
 """
 
 import asyncio
+import html
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -23,12 +26,13 @@ from typing import Any
 import phonenumbers
 from starlette.applications import Starlette
 from starlette.datastructures import FormData
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 import botsapp.state as state
-from botsapp.admin import templates
+from botsapp.admin import auth, templates
 from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store
 from botsapp.db import DatabaseManager
 from botsapp.message_store import MessageStore
@@ -58,6 +62,7 @@ _community_jids: set[str] = set()
 @asynccontextmanager
 async def lifespan(_app: Starlette) -> AsyncIterator[None]:
     global _raw_store
+    auth.config = auth.config_from_env()  # fails loudly if login isn't configured
     state.db = DatabaseManager(os.environ["DATABASE_URL"])  # a SQLite file path
     await state.db.connect()
     await state.db.ensure_schema()
@@ -65,12 +70,8 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         # Adopts the single-tenant data as the first admin's primary account
         # (idempotent) — docs/decisions/0025.
         await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
-        # Until the multi-user admin UI (0025 phase 4), the admin operates as
-        # the first admin on the primary account — the same (account, viewer)
-        # an MCP call from that user resolves to.
-        state.admin_chat_db = ScopedChatDb(state.db, "default", admin_email.lower())
     else:
-        logger.error("BOTSAPP_ADMIN_EMAIL is not set: chat allowlist/tag edits are disabled")
+        logger.error("BOTSAPP_ADMIN_EMAIL is not set: no user will be an admin or own an account")
 
     bridge, raw_store = build_bridge_and_store()
     state.bridge = bridge
@@ -83,7 +84,7 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
     await state.db.close()
     state.db = None
     state.bridge = None
-    state.admin_chat_db = None
+    auth.config = None
     _raw_store = None
 
 
@@ -123,6 +124,13 @@ def _country_flag(jid: str) -> str:
         return ""
     flag = "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in region)
     return f"{flag} +{phonenumbers.country_code_for_region(region)}"
+
+
+def _chat_db(request: Request) -> ScopedChatDb:
+    """Chat allowlist/tags for the signed-in user on the ``default`` account —
+    the same (account, viewer) an MCP call from that user resolves to."""
+    assert state.db is not None
+    return ScopedChatDb(state.db, auth.DEFAULT_ACCOUNT_ID, request.state.user["email"])
 
 
 async def _poll_status() -> dict[str, Any]:
@@ -184,10 +192,10 @@ async def session_delete(_request: Request) -> Response:
     return RedirectResponse(url="/", status_code=303)
 
 
-async def chats_index(_request: Request) -> Response:
+async def chats_index(request: Request) -> Response:
     assert state.bridge is not None
-    assert state.admin_chat_db is not None
     assert _raw_store is not None
+    chat_db = _chat_db(request)
 
     session_status = await get_status(state.bridge)
     if not session_status.logged_in:
@@ -217,7 +225,7 @@ async def chats_index(_request: Request) -> Response:
         jid = chat["jid"]
         contact = contacts.get(jid)
         display_name = (contact.name if contact else None) or chat.get("name") or jid
-        meta = await state.admin_chat_db.get_chat_metadata(jid=jid) or {}
+        meta = await chat_db.get_chat_metadata(jid=jid) or {}
         direct_rows.append(
             {
                 "jid": jid,
@@ -241,7 +249,7 @@ async def chats_index(_request: Request) -> Response:
     newsletter_rows: list[dict[str, Any]] = []
     for chat, avatar in zip(newsletter_chats, newsletter_avatars, strict=True):
         jid = chat["jid"]
-        meta = await state.admin_chat_db.get_chat_metadata(jid=jid) or {}
+        meta = await chat_db.get_chat_metadata(jid=jid) or {}
         newsletter_rows.append(
             {
                 "jid": jid,
@@ -295,7 +303,7 @@ async def chats_index(_request: Request) -> Response:
     )
     group_rows: list[dict[str, Any]] = []
     for g, avatar in zip(regular_groups, group_avatars, strict=True):
-        meta = await state.admin_chat_db.get_chat_metadata(jid=g.jid) or {}
+        meta = await chat_db.get_chat_metadata(jid=g.jid) or {}
         group_rows.append(
             {
                 "jid": g.jid,
@@ -314,7 +322,7 @@ async def chats_index(_request: Request) -> Response:
     )
     community_rows: list[dict[str, Any]] = []
     for g, avatar in zip(community_groups, community_avatars, strict=True):
-        meta = await state.admin_chat_db.get_chat_metadata(jid=g.jid) or {}
+        meta = await chat_db.get_chat_metadata(jid=g.jid) or {}
         community_rows.append(
             {
                 "jid": g.jid,
@@ -328,7 +336,7 @@ async def chats_index(_request: Request) -> Response:
 
     status_row = None
     if status_seen:
-        meta = await state.admin_chat_db.get_chat_metadata(jid=STATUS_BROADCAST_JID) or {}
+        meta = await chat_db.get_chat_metadata(jid=STATUS_BROADCAST_JID) or {}
         status_row = {
             "jid": STATUS_BROADCAST_JID,
             "is_allowed": bool(meta.get("is_allowed")),
@@ -375,11 +383,10 @@ def _redirect_to_tab(jid: str) -> RedirectResponse:
 
 
 async def toggle_allowed(request: Request) -> Response:
-    assert state.admin_chat_db is not None
     jid = request.path_params["jid"]
     form = await request.form()
     is_allowed = form.get("is_allowed") == "on"
-    await state.admin_chat_db.set_chat_allowed(jid=jid, is_allowed=is_allowed)
+    await _chat_db(request).set_chat_allowed(jid=jid, is_allowed=is_allowed)
     return _redirect_to_tab(jid)
 
 
@@ -392,11 +399,10 @@ def _form_str(form: FormData, key: str) -> str:
 
 
 async def save_metadata(request: Request) -> Response:
-    assert state.admin_chat_db is not None
     jid = request.path_params["jid"]
     form = await request.form()
     tags = [t.strip() for t in _form_str(form, "tags").split(",") if t.strip()]
-    await state.admin_chat_db.upsert_chat_metadata(jid=jid, tags=tags)
+    await _chat_db(request).upsert_chat_metadata(jid=jid, tags=tags)
     return _redirect_to_tab(jid)
 
 
@@ -417,7 +423,12 @@ async def add_allowed_email(request: Request) -> Response:
 
 async def remove_allowed_email(request: Request) -> Response:
     assert state.db is not None
-    await state.db.remove_allowed_email(request.path_params["email"])
+    try:
+        await state.db.remove_allowed_email(request.path_params["email"])
+    except ValueError as exc:  # still owns an account (0025)
+        return HTMLResponse(
+            templates.message_page("Can't remove user", html.escape(str(exc))), status_code=409
+        )
     return RedirectResponse(url="/access", status_code=303)
 
 
@@ -434,6 +445,8 @@ app = Starlette(
         Route("/access", access_index),
         Route("/access/add", add_allowed_email, methods=["POST"]),
         Route("/access/{email}/remove", remove_allowed_email, methods=["POST"]),
+        *auth.routes,
     ],
+    middleware=[Middleware(auth.AuthMiddleware)],
     lifespan=lifespan,
 )

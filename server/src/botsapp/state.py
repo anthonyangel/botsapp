@@ -14,10 +14,7 @@ if TYPE_CHECKING:
     from botsapp.bridge import Bridge
     from botsapp.bridge_registry import BridgeRegistry
     from botsapp.db import DatabaseManager
-    from botsapp.scope import ScopedChatDb
 
 db: DatabaseManager | None = None
 bridge: Bridge | None = None
 registry: BridgeRegistry | None = None
-# Admin UI only: the chat-metadata handle for the account/viewer it operates as (0025).
-admin_chat_db: ScopedChatDb | None = None

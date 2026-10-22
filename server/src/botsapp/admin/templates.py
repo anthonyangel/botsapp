@@ -126,6 +126,7 @@ def _page(title: str, body: str, bridge_name: str = "") -> str:
           <a class="mdl-navigation__link" href="/">Session</a>
           <a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>
           <a class="mdl-navigation__link" href="/access">Access</a>
+          <a class="mdl-navigation__link" href="/logout">Sign out</a>
         </nav>
       </div>
     </header>
@@ -139,6 +140,15 @@ def _page(title: str, body: str, bridge_name: str = "") -> str:
   <script src="{_MDL_JS}"></script>
 </body>
 </html>"""
+
+
+def message_page(title: str, message_html: str) -> str:
+    """A bare notice page (login errors, signed-out). ``message_html`` is
+    trusted markup from admin/auth.py; interpolate user data only via
+    html.escape before passing it in."""
+    return _page(
+        title, f'<div class="mdl-card mdl-shadow--2dp" style="padding:16px">{message_html}</div>'
+    )
 
 
 def _avatar(url: str | None, alt: str) -> str:

@@ -15,7 +15,9 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   `app.py` (kept separate from `main.py` so `tools.py` can import it without
   a circular dependency); tools live in `tools.py`.
 - `botsapp.admin_main:app` — the admin UI, port 8100. Starlette app in
-  `admin/app.py`, hand-rolled f-string templates in `admin/templates.py`
+  `admin/app.py`, login + route policy in `admin/auth.py` (AuthKit via an
+  `AuthKitClient` protocol, signed-cookie session, per-request role lookup,
+  Origin check for CSRF), hand-rolled f-string templates in `admin/templates.py`
   (no Jinja2 — the UI is a handful of pages, not enough surface to justify
   the dependency).
 

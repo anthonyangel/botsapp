@@ -34,7 +34,7 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
 |---|---|---|
 | `waha` | WhatsApp bridge, NOWEB engine (`devlikeapro/waha:noweb-<version>` on Fly, `noweb-arm-<version>` locally — version-pinned, never `dev`; see [0023](docs/decisions/0023-waha-noweb-version-pinned-images.md)) | private only, always |
 | `mcp-server` | The MCP endpoint (`botsapp.main:app`, port 8000) — the *only* thing meant to be public | public, gated by WorkOS AuthKit login |
-| `admin-ui` | QR login + chat allowlist/tags (`botsapp.admin_main:app`, port 8100) — same image as `mcp-server`, different `command:` | private only, always — **no login of its own** |
+| `admin-ui` | QR login + chat allowlist/tags (`botsapp.admin_main:app`, port 8100) — same image as `mcp-server`, different `command:` | private until the AuthKit login ([0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md), `admin/auth.py`) is verified against live WorkOS; then reachable behind that login. Needs login settings or an explicit `ADMIN_DISABLE_AUTH` |
 
 - `mcp-server` and `admin-ui` share one SQLite file (`chat_metadata.db`, WAL
   mode) for tags/allowlist — see [0007](docs/decisions/0007-sqlite-for-metadata-store.md).
@@ -46,11 +46,13 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   admin UI — see [0004](docs/decisions/0004-chat-allowlist-and-admin-ui.md).
 - Multi-tenancy is in progress ([0025](docs/decisions/0025-multi-tenancy-users-accounts-grants.md)):
   users/accounts/grants/per-viewer `chat_access` are live; MCP tools resolve a
-  per-caller scope (`server/src/botsapp/scope.py`). The admin UI is still
-  login-less and single-operator until it ships the AuthKit login decided in
+  per-caller scope (`server/src/botsapp/scope.py`). The admin UI has the AuthKit
+  login decided in
   [0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md)
-  (one WorkOS org, `admin`/`member` role in WorkOS; grants and chat visibility
-  stay in the DB). Needs `BOTSAPP_ADMIN_EMAIL`.
+  (built and tested against a stubbed WorkOS client; not yet verified live;
+  one WorkOS org, role in WorkOS, grants and chat visibility in the DB). Its
+  pages still operate on the `default` account until the per-account pages land.
+  Needs `BOTSAPP_ADMIN_EMAIL`.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked
   server-side via `restrict_tag` (a scope no real auth token will ever carry)
   — this server is read-only by construction, not by convention. See

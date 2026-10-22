@@ -48,6 +48,15 @@ primary_region = "fra"
   # WhatsApp account; the pre-multi-tenancy allowlist/tags are adopted into it
   # on first start. Left empty, nothing is visible to the MCP server.
   BOTSAPP_ADMIN_EMAIL = ""
+  # Admin UI login (docs/decisions/0026). It refuses to start without either the
+  # login settings (WORKOS_CLIENT_ID, WORKOS_API_KEY, BOTSAPP_SESSION_SECRET as
+  # `fly secrets`; ADMIN_BASE_URL, optionally WORKOS_ORG_ID, here) or an explicit
+  # opt-out. Until login is configured and verified against live WorkOS, keep the
+  # admin UI private and set ADMIN_DISABLE_AUTH = "true" — it affects the admin UI
+  # only (unlike LOCAL_DEV_DISABLE_AUTH, which would also open the MCP server).
+  # Note start.sh backgrounds the admin UI, so a refusal to start is silent to
+  # Fly's health checks: check `fly logs` after deploying.
+  ADMIN_DISABLE_AUTH = "true"
   LOG_LEVEL = "INFO"
   # This app's own public URL — must match whatever `fly apps create`
   # actually names it (https://<app-name>.fly.dev).

@@ -80,15 +80,24 @@ services:
     restart: unless-stopped
 
   admin-ui:
-    # Network-private by design — no login of its own, so it must never get
-    # a non-loopback port binding here, and never a public Fly service when
-    # deployed. Same image as mcp-server, different entrypoint.
+    # Behind an AuthKit login (docs/decisions/0026, admin/auth.py) unless
+    # LOCAL_DEV_DISABLE_AUTH/ADMIN_DISABLE_AUTH is set. The login has not been
+    # exercised against a live WorkOS environment yet, so keep this loopback-
+    # only and off any public Fly service until it has. Same image as
+    # mcp-server, different entrypoint.
     build: ./server
     command: ["uv", "run", "uvicorn", "botsapp.admin_main:app", "--host", "0.0.0.0", "--port", "8100"]
     ports:
       - "127.0.0.1:8100:8100"
     environment:
       <<: *bridge-env
+      LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
+      ADMIN_DISABLE_AUTH: ${ADMIN_DISABLE_AUTH:-}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
+      WORKOS_API_KEY: ${WORKOS_API_KEY:-}
+      WORKOS_ORG_ID: ${WORKOS_ORG_ID:-}
+      ADMIN_BASE_URL: ${ADMIN_BASE_URL:-http://localhost:8100}
+      BOTSAPP_SESSION_SECRET: ${BOTSAPP_SESSION_SECRET:-}
     volumes:
       - metadata-data:/app/data
     depends_on:
