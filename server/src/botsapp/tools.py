@@ -29,12 +29,13 @@ here branches on which bridge is selected.
 import logging
 import mimetypes
 from dataclasses import asdict
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any
 
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Audio, File, Image
 from mcp.types import ResourceLink, ToolAnnotations
+from pydantic import BaseModel, ConfigDict, Field
 
 import botsapp.state as state
 from botsapp.app import OUTBOUND_TAG, mcp
@@ -79,48 +80,49 @@ _UNTRUSTED_NOTE = (
 
 # ── Structured output shapes ─────────────────────────────────────────────────
 #
-# Used as return annotations so each tool advertises a real outputSchema.
-# Fields are documented here once rather than only in docstrings.
+# Used as return types so each tool advertises a real outputSchema, and so a
+# malformed bridge/DB row fails loudly here rather than reaching the client.
+# Unknown extra fields from the store are dropped (pydantic's default).
 
 
-class Chat(TypedDict):
-    id: str
+class Chat(BaseModel):
     jid: str
     name: str
-    unread_count: int
-    last_message: NotRequired[str | None]
-    last_message_at: NotRequired[str | None]
+    last_message: str | None = None
+    last_message_at: str | None = Field(None, description="ISO-8601 UTC timestamp")
 
 
-Message = TypedDict(
-    "Message",
-    {
-        "message_id": str,
-        "from": str,
-        "sender_name": str,
-        "to": NotRequired[str],
-        "chat_jid": str,
-        "chat_name": str,
-        "text": str,
-        "timestamp": str,
-        "message_type": str,
-        "media_url": NotRequired[str | None],
-        "mimetype": NotRequired[str | None],
-    },
-)
+class Message(BaseModel):
+    # Serialized as "from" (a Python keyword, hence the alias).
+    # serialize_by_alias also makes the advertised outputSchema say "from".
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    message_id: str | None
+    from_: str = Field(alias="from")
+    sender_name: str
+    to: str | None = None
+    chat_jid: str
+    chat_name: str
+    text: str | None = Field(None, description="Untrusted third-party content")
+    timestamp: str | None = Field(None, description="ISO-8601 UTC timestamp")
+    message_type: str = Field(description='"text" or "media"')
+    media_url: str | None = None
+    mimetype: str | None = Field(
+        None, description="Set whenever message_type is 'media'; pass message_id to get_media()"
+    )
 
 
-class ChatPage(TypedDict):
+class ChatPage(BaseModel):
     items: list[Chat]
-    next_offset: int | None
+    next_offset: int | None = Field(description="Pass as offset for the next page; null = no more")
 
 
-class MessagePage(TypedDict):
+class MessagePage(BaseModel):
     items: list[Message]
-    next_offset: int | None
+    next_offset: int | None = Field(description="Pass as offset for the next page; null = no more")
 
 
-class Group(TypedDict):
+class Group(BaseModel):
     jid: str
     name: str
     topic: str
@@ -129,37 +131,31 @@ class Group(TypedDict):
     linked_parent_jid: str
 
 
-class Community(TypedDict):
+class Community(BaseModel):
     jid: str
     name: str
     topic: str
 
 
-class GroupDetail(TypedDict):
-    jid: str
-    name: str
-    topic: str
-    participant_count: int
+class GroupDetail(Group):
     participants: list[str]
-    is_community: bool
-    linked_parent_jid: str
-    invite_link: str | None
+    invite_link: str | None = None
 
 
-class ChatMetadata(TypedDict):
+class ChatMetadata(BaseModel):
     jid: str
-    tags: list[str]
-    updated_at: NotRequired[str | None]
-    status: NotRequired[str]
+    tags: list[str] = []
+    updated_at: str | None = None
+    status: str | None = None
 
 
-class TagResult(TypedDict):
+class TagResult(BaseModel):
     jid: str
     tags: list[str]
     status: str
 
 
-def _page(rows: list[Any], limit: int, offset: int) -> Any:
+def _page(rows: list[Any], limit: int, offset: int) -> dict[str, Any]:
     """Trim a limit+1 fetch to ``limit`` items and say where the next page starts.
 
     Callers fetch one extra row; its presence is the only signal that more
@@ -220,7 +216,7 @@ async def list_chats(
         tags: Optional list of tags to search for (matches if chat has ANY of these).
 
     Returns:
-        Object with ``items`` (chats with fields: id, jid, name, unread_count,
+        Object with ``items`` (chats with fields: jid, name,
         last_message, last_message_at) and ``next_offset`` — pass it as
         ``offset`` to get the next page; null means there are no more results.
     """
@@ -238,14 +234,16 @@ async def list_chats(
                 chat = await state.message_store.get_chat(match["jid"])
                 if chat is not None:
                     resolved.append(chat)
-            return _page(resolved[offset : offset + limit + 1], limit, offset)
+            return ChatPage.model_validate(
+                _page(resolved[offset : offset + limit + 1], limit, offset)
+            )
         elif query:
             rows = await state.message_store.search_chats(
                 query=query, limit=limit + 1, offset=offset
             )
         else:
             rows = await state.message_store.get_chats(limit=limit + 1, offset=offset)
-        return _page(rows, limit, offset)
+        return ChatPage.model_validate(_page(rows, limit, offset))
     except Exception as exc:
         raise _fail("list_chats", exc) from exc
 
@@ -280,7 +278,7 @@ async def list_messages(jid: str, limit: int = 50, offset: int = 0) -> MessagePa
         assert state.message_store is not None
         limit = max(1, min(limit, MAX_LIST_LIMIT))
         rows = await state.message_store.list_messages(jid=jid, limit=limit + 1, offset=offset)
-        return _page(rows, limit, offset)
+        return MessagePage.model_validate(_page(rows, limit, offset))
     except Exception as exc:
         raise _fail("list_messages", exc) from exc
 
@@ -320,7 +318,7 @@ async def search_messages(
         rows = await state.message_store.search_messages(
             query=query, jid=jid, limit=limit + 1, offset=offset
         )
-        return _page(rows, limit, offset)
+        return MessagePage.model_validate(_page(rows, limit, offset))
     except Exception as exc:
         raise _fail("search_messages", exc) from exc
 
@@ -435,14 +433,14 @@ async def list_groups(
             if max_participants and g.participant_count > max_participants:
                 continue
             results.append(
-                {
-                    "jid": g.jid,
-                    "name": g.name,
-                    "topic": g.topic,
-                    "participant_count": g.participant_count,
-                    "is_community": g.is_community,
-                    "linked_parent_jid": g.linked_parent_jid,
-                }
+                Group(
+                    jid=g.jid,
+                    name=g.name,
+                    topic=g.topic,
+                    participant_count=g.participant_count,
+                    is_community=g.is_community,
+                    linked_parent_jid=g.linked_parent_jid,
+                )
             )
         return results
     except Exception as exc:
@@ -494,7 +492,7 @@ async def list_communities(query: str = "", tags: list[str] | None = None) -> li
                 continue
             if query_lower and query_lower not in g.name.lower():
                 continue
-            results.append({"jid": g.jid, "name": g.name, "topic": g.topic})
+            results.append(Community(jid=g.jid, name=g.name, topic=g.topic))
         return results
     except Exception as exc:
         raise _fail("list_communities", exc) from exc
@@ -521,7 +519,7 @@ async def get_group_info(jid: str) -> GroupDetail:
     try:
         assert state.bridge is not None
         await _require_allowed(jid)
-        return cast(GroupDetail, asdict(await state.bridge.get_group_info(jid)))
+        return GroupDetail.model_validate(asdict(await state.bridge.get_group_info(jid)))
     except Exception as exc:
         raise _fail("get_group_info", exc) from exc
 
@@ -817,7 +815,7 @@ async def add_tag(jid: str, tag: str) -> TagResult:
         if tag not in current:
             current.append(tag)
         await state.db.upsert_chat_metadata(jid=jid, tags=current)
-        return {"jid": jid, "tags": current, "status": "saved"}
+        return TagResult(jid=jid, tags=current, status="saved")
     except Exception as exc:
         raise _fail("add_tag", exc) from exc
 
@@ -842,7 +840,7 @@ async def remove_tag(jid: str, tag: str) -> TagResult:
         meta = await state.db.get_chat_metadata(jid=jid)
         current = [t for t in (meta["tags"] if meta else []) if t != tag]
         await state.db.upsert_chat_metadata(jid=jid, tags=current)
-        return {"jid": jid, "tags": current, "status": "saved"}
+        return TagResult(jid=jid, tags=current, status="saved")
     except Exception as exc:
         raise _fail("remove_tag", exc) from exc
 
@@ -863,7 +861,7 @@ async def clear_tags(jid: str) -> TagResult:
         assert state.db is not None
         await _require_allowed(jid)
         await state.db.upsert_chat_metadata(jid=jid, tags=[])
-        return {"jid": jid, "tags": [], "status": "saved"}
+        return TagResult(jid=jid, tags=[], status="saved")
     except Exception as exc:
         raise _fail("clear_tags", exc) from exc
 
@@ -883,8 +881,8 @@ async def get_chat_metadata(jid: str) -> ChatMetadata:
         await _require_allowed(jid)
         meta = await state.db.get_chat_metadata(jid=jid)
         if meta is None:
-            return {"jid": jid, "tags": [], "status": "no metadata"}
-        return cast(ChatMetadata, meta)
+            return ChatMetadata(jid=jid, tags=[], status="no metadata")
+        return ChatMetadata.model_validate(meta)
     except Exception as exc:
         raise _fail("get_chat_metadata", exc) from exc
 
