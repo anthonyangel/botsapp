@@ -60,6 +60,10 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
     state.db = DatabaseManager(os.environ["DATABASE_URL"])  # a SQLite file path
     await state.db.connect()
     await state.db.ensure_schema()
+    if admin_email := os.environ.get("BOTSAPP_ADMIN_EMAIL", "").strip():
+        # Adopts the single-tenant data as the first admin's primary account
+        # (idempotent) — docs/decisions/0025.
+        await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
 
     bridge, raw_store = build_bridge_and_store()
     state.bridge = bridge

@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0024.
+been kept in date order, current through 0025.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -44,6 +44,9 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   Machines) can't share it. See [0013](docs/decisions/0013-single-fly-app-shared-volume.md).
 - Nothing is visible to the MCP server until explicitly allowlisted in the
   admin UI — see [0004](docs/decisions/0004-chat-allowlist-and-admin-ui.md).
+- Multi-tenancy is in progress ([0025](docs/decisions/0025-multi-tenancy-users-accounts-grants.md)):
+  `users`/`accounts`/`grants`/`chat_access` tables exist (phase 1); MCP tools
+  and the admin UI still use the single-tenant allowlist until phases 3–4.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked
   server-side via `restrict_tag` (a scope no real auth token will ever carry)
   — this server is read-only by construction, not by convention. See

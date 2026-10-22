@@ -89,6 +89,10 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
     state.db = DatabaseManager(os.environ["DATABASE_URL"])  # a SQLite file path
     await state.db.connect()
     await state.db.ensure_schema()
+    if admin_email := os.environ.get("BOTSAPP_ADMIN_EMAIL", "").strip():
+        # Adopts the single-tenant data as the first admin's primary account
+        # (idempotent) — docs/decisions/0025.
+        await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
 
     # The admin UI talks to the raw store directly — it needs to see
     # not-yet-allowed chats in order to allow them. Every other consumer

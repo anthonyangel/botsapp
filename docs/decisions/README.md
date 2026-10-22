@@ -26,6 +26,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0022 — Renovate: fewer, grouped PRs; no Python-minor PRs; fix the WAHA digest pin](0022-renovate-tidy-and-waha-pin-fix.md) *(changes parts of 0020)*
 - [0023 — WAHA: NOWEB engine everywhere, on version-pinned images (no `dev` tags)](0023-waha-noweb-version-pinned-images.md) *(supersedes the dev-arm note in 0007 and parts of 0022)*
 - [0024 — `choose_group`: an interactive picker on MCP 2026-07-28 (requires FastMCP 4)](0024-interactive-choose-group.md)
+- [0025 — Multi-tenancy: users, accounts, grants, per-viewer chat access](0025-multi-tenancy-users-accounts-grants.md) *(will supersede the no-login-admin invariant in 0004/0013 in phase 4)*
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 

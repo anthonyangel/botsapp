@@ -186,3 +186,106 @@ async def test_remove_allowed_email_missing_is_a_noop(db: DatabaseManager):
 
 async def test_list_allowed_emails_empty(db: DatabaseManager):
     assert await db.list_allowed_emails() == []
+
+
+# ── multi-tenancy: users, accounts, grants, per-viewer chat access (0025) ────
+
+
+async def _two_users(db: DatabaseManager) -> None:
+    await db.bootstrap("me@example.com", "default")
+    await db.add_user("her@example.com")
+
+
+async def test_email_allowlist_is_backed_by_users(db: DatabaseManager):
+    await db.add_allowed_email("Her@Example.com")
+    assert await db.is_email_allowed("her@example.com")
+    user = await db.get_user("her@example.com")
+    assert user is not None and user["is_admin"] is False
+
+
+async def test_legacy_allowed_emails_backfilled_into_users(tmp_path):
+    first = DatabaseManager(str(tmp_path / "legacy.db"))
+    await first.connect()
+    await first.ensure_schema()
+    await first.connection.execute("INSERT INTO allowed_emails (email) VALUES ('old@example.com')")
+    await first.connection.commit()
+    await first.ensure_schema()  # next start
+    assert await first.is_email_allowed("old@example.com")
+    await first.close()
+
+
+async def test_bootstrap_adopts_legacy_chat_metadata_and_is_idempotent(db: DatabaseManager):
+    await db.set_chat_allowed("a@g.us", True)
+    await db.upsert_chat_metadata("a@g.us", ["fam"])
+    await db.bootstrap("me@example.com", "default")
+    await db.bootstrap("me@example.com", "default")
+    user = await db.get_user("me@example.com")
+    assert user is not None and user["is_admin"] is True
+    assert [a["id"] for a in await db.list_accounts()] == ["default"]
+    assert await db.list_allowed_jids_for("default", "me@example.com") == {"a@g.us"}
+    rows = await db.search_by_tags_for("default", "me@example.com", ["FAM"])
+    assert [r["jid"] for r in rows] == ["a@g.us"]
+
+
+async def test_visibility_is_per_viewer(db: DatabaseManager):
+    await _two_users(db)
+    await db.set_chat_access_allowed("default", "me@example.com", "a@g.us", True)
+    await db.grant_account("default", "her@example.com")
+    assert await db.list_allowed_jids_for("default", "her@example.com") == set()
+    await db.set_chat_access_allowed("default", "her@example.com", "b@g.us", True)
+    assert await db.list_allowed_jids_for("default", "her@example.com") == {"b@g.us"}
+    assert await db.list_allowed_jids_for("default", "me@example.com") == {"a@g.us"}
+
+
+async def test_tags_are_per_viewer(db: DatabaseManager):
+    await _two_users(db)
+    await db.grant_account("default", "her@example.com")
+    for who, tag in (("me@example.com", "mine"), ("her@example.com", "hers")):
+        await db.set_chat_access_allowed("default", who, "a@g.us", True)
+        await db.upsert_chat_access_tags("default", who, "a@g.us", [tag])
+    assert await db.search_by_tags_for("default", "her@example.com", ["mine"]) == []
+    assert len(await db.search_by_tags_for("default", "her@example.com", ["hers"])) == 1
+
+
+async def test_no_grant_means_no_access_and_no_writes(db: DatabaseManager):
+    await _two_users(db)
+    assert await db.list_allowed_jids_for("default", "her@example.com") == set()
+    with pytest.raises(PermissionError):
+        await db.set_chat_access_allowed("default", "her@example.com", "a@g.us", True)
+    with pytest.raises(PermissionError):
+        await db.upsert_chat_access_tags("default", "her@example.com", "a@g.us", ["x"])
+
+
+async def test_revoke_hides_and_drops_viewer_rows(db: DatabaseManager):
+    await _two_users(db)
+    await db.grant_account("default", "her@example.com")
+    await db.set_chat_access_allowed("default", "her@example.com", "b@g.us", True)
+    await db.revoke_account("default", "her@example.com")
+    assert await db.list_allowed_jids_for("default", "her@example.com") == set()
+    await db.grant_account("default", "her@example.com")  # re-grant starts empty
+    assert await db.list_allowed_jids_for("default", "her@example.com") == set()
+
+
+async def test_accounts_for_user_covers_owned_and_granted(db: DatabaseManager):
+    await _two_users(db)
+    await db.add_account("hers", "her@example.com", "acct-hers")
+    assert [a["id"] for a in await db.list_accounts_for_user("her@example.com")] == ["hers"]
+    await db.grant_account("default", "her@example.com")
+    ids = [a["id"] for a in await db.list_accounts_for_user("her@example.com")]
+    assert sorted(ids) == ["default", "hers"]
+    assert [a["id"] for a in await db.list_accounts_for_user("me@example.com")] == ["default"]
+
+
+async def test_cannot_remove_user_who_owns_an_account(db: DatabaseManager):
+    await _two_users(db)
+    with pytest.raises(ValueError, match="owns"):
+        await db.remove_user("me@example.com")
+    await db.grant_account("default", "her@example.com")
+    await db.remove_user("her@example.com")
+    assert await db.list_grants("default") == []
+    assert not await db.is_email_allowed("her@example.com")
+
+
+async def test_account_requires_known_owner(db: DatabaseManager):
+    with pytest.raises(ValueError):
+        await db.add_account("x", "ghost@example.com", "acct-x")

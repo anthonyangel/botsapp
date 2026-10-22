@@ -6,6 +6,7 @@ x-bridge-env: &bridge-env
   WAHA_URL: http://waha:3000
   WAHA_API_KEY: ${WAHA_API_KEY:-}
   WAHA_SESSION: ${WAHA_SESSION:-default}
+  BOTSAPP_ADMIN_EMAIL: ${BOTSAPP_ADMIN_EMAIL:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   TZ: Asia/Jerusalem
 
