@@ -7,6 +7,7 @@
 - Per-account WAHA session keys, encrypted in the DB — #52; showing MCP tools only when the key's scopes allow them — #54.
 - WorkOS login and Users page exercised against a real environment — see "Not verified" in 0026.
 - Retire the legacy tables and single-tenant code — #53. Jinja2 for the admin templates — #55.
+- Runbook for turning the admin login on and onboarding a second person — #56.
 
 ## Context
 
