@@ -2,12 +2,12 @@
 
 **Status:** Decided (2026-10). Phases 1–4 are implemented on PR #45 (schema, bridge registry, scoped MCP enforcement, and the admin login and pages decided in [0026](0026-admin-login-authkit-single-org-authn-authz-split.md)); phase 5 (onboarding the second user) waits on the live checks below.
 
-**Where things stand / what's left** (ideas and follow-ups live in GitHub issues, not in this file):
-- Live WAHA probe: multi-session, session keys, key updates, scope table — #47.
-- Per-account WAHA session keys, encrypted in the DB — implemented in [0027](0027-scoped-waha-session-keys.md) against a stub (#52), pending the live probe; showing MCP tools only when the key's scopes allow them — built (#54, section in 0027), same caveat.
-- WorkOS login and Users page exercised against a real environment — see "Not verified" in 0026.
-- Retire the legacy tables and single-tenant code — #53. Jinja2 for the admin templates — #55.
-- Runbook for turning the admin login on and onboarding a second person — #56.
+**Where things stand / what's left** (ideas and follow-ups live in GitHub issues, not in this file). Everything below up to #54 is built in PR #45 against stubbed WorkOS/WAHA and stays open until verified live:
+- Live WAHA probe: multi-session, session keys, key updates, scope table — #47 (blocks closing #50, #51, #52, #54).
+- Admin login, Users, Accounts, self-service Chats — #48, #49, #50, #51 (each has a "remaining" checklist; a real WorkOS login is the common blocker).
+- Per-account WAHA session keys, encrypted in the DB — [0027](0027-scoped-waha-session-keys.md), #52; MCP tools shown only when the key's scopes allow them — #54.
+- Not built: pending-invitation display on the Users page — #57; `tools/list_changed` after key/share/pairing changes — #58; the setup runbook — #56; Jinja2 for the admin templates — #55.
+- Retire the legacy tables, single-tenant code and transition scaffolding (admin-key fallback, `ADMIN_DISABLE_AUTH`) once live — #53.
 
 ## Context
 
