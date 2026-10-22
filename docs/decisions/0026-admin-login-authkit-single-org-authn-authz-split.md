@@ -1,0 +1,68 @@
+# 0026 — Admin login via AuthKit, one WorkOS organization, and the authn/authz split
+
+**Status:** Decided (2026-10); not yet implemented — tracked in #48 (login), #49 (users page), #50 (accounts/grants pages), #51 (self-service), #52 (scoped WAHA keys).
+
+## Context
+
+[0025](0025-multi-tenancy-users-accounts-grants.md) made botsapp multi-user: users own WhatsApp accounts, accounts can be granted to other users, and chat visibility is per (account, viewer). The MCP side is done and resolves a scope per call from the caller's email. The admin UI is the remaining single-tenant piece: it has no login and is reachable only on the private network ([0004](0004-chat-allowlist-and-admin-ui.md), [0013](0013-single-fly-app-shared-volume.md)), so the second person cannot pair her own number or choose her own chats without the owner operating it for her.
+
+Two questions follow: how do people log in to the admin UI, and where does each kind of permission live. The earlier stance was "AuthKit authenticates only; everything else is the app's DB, and WorkOS RBAC is out of scope" (root `CLAUDE.md`, [0015](0015-email-allowlist-in-db.md)). That stance is partly reversed here.
+
+What WorkOS can express was checked against its own docs ([FGA](https://workos.com/docs/fga/index.md), [RBAC/FGA blog](https://workos.com/blog/rbac-fga-multi-tenant-b2b)): organization-level roles and permissions are carried in the access token; per-resource grants are not, and WorkOS itself recommends API checks for those because of token size, freshness and verification cost. Roles attach to an organization membership, and a session is scoped to one organization at a time.
+
+## Decision
+
+**1. The admin UI gets a login, through AuthKit.** The browser flow uses AuthKit as the OpenID Connect provider (`/login`, callback, signed HTTP-only session cookie holding only the email). The MCP server keeps using AuthKit as an OAuth resource server, unchanged. The admin app is therefore publicly reachable, but only behind that login.
+
+**2. One WorkOS organization ("botsapp").** Members are botsapp's users, each with a role of `admin` or `member`. Accounts are *not* organizations, so a user with several WhatsApp accounts needs no org switching and every token carries the same `org_id` and a single role.
+
+**3. The split — who decides what:**
+
+| Concern | Lives in | Why |
+|---|---|---|
+| Identity (is this really that email) | AuthKit | Unchanged. |
+| Membership: is this person in the system at all | WorkOS org membership, plus a `users` row | Admin invites/removes through the WorkOS API (WorkOS sends the invitation email). The `users` row is created only on invite, so a stranger who signs up at AuthKit gets nothing. |
+| `admin` vs `member` | WorkOS role, surfaced in the JWT via the JWT template | Coarse, org-wide, fits a token. |
+| Which accounts a user may use (`grants`) | App DB | Per-resource and changes often; checked live on every call, so revocation is instant. |
+| Which chats a viewer sees, and their tags (`chat_access`) | App DB | High-cardinality, per viewer. |
+| Never send | Code (`outbound` tag, `restrict_tag`) | Unchanged and not configurable. |
+
+**4. MCP tokens carry identity only.** Grants are resolved server side per call (`scope.resolve_scope`), so the MCP path needs no role claim. The role claim matters only to the admin UI, which can read it from its own session flow. The JWT template change is therefore optional for MCP.
+
+**5. Route rules in the admin UI.** Any signed-in user reaches `/me/*` (their own accounts only: pair a session, tags, visible chats, grant or revoke their own account to existing users). Only `admin` reaches `/admin/*` (users, accounts). Every data access goes through the same scoped `DatabaseManager` methods the MCP tools use, so authorization stays in one place rather than in route handlers.
+
+**6. Failure and consistency rules.**
+- Invite/remove is one operation across WorkOS and the DB: a failed WorkOS call leaves no `users` row, and a failed DB write leaves no dangling invitation.
+- Removing or demoting someone takes effect on their next token. For sensitive admin actions the role is re-checked live through the WorkOS API rather than trusted from the cookie or token.
+- If the WorkOS API is down, existing access keeps working; invite, remove and role changes fail with a clear message.
+- `users.is_admin` either becomes a cached mirror of the WorkOS role or is dropped; decided in #49 (see Consequences).
+
+## Supersedes / amends
+
+- **Supersedes** the "admin-ui has no login of its own, private-only, always" invariant in [0004](0004-chat-allowlist-and-admin-ui.md) and [0013](0013-single-fly-app-shared-volume.md), and completes the item 0025 deferred ("the login mechanism gets its own record").
+- **Amends** the root `CLAUDE.md` line that botsapp has "no WorkOS RBAC (permissions/roles/orgs)": from this record on there is one org and an `admin`/`member` role. Fine-grained permissions, multiple orgs and FGA remain out of scope.
+- **Narrows** [0015](0015-email-allowlist-in-db.md): the DB `users` table is still the login gate on the MCP side, but membership is now also reflected in WorkOS.
+- Leaves [0005](0005-authkit-oauth-provider.md), [0011](0011-jwt-template-drops-workostokenverifier.md) and the open bug [0012](0012-authkitprovider-issuer-trailing-slash-bug.md) untouched for the MCP path.
+
+## Alternatives considered
+
+| Option | Why not |
+|---|---|
+| Keep authorization entirely in the app DB; AuthKit only authenticates | Works, and is what exists today. Rejected as the *whole* answer because admin/member and invitations are naturally WorkOS features (invitation emails, role in the token), and the admin page can drive them by API. Grants and chat visibility stay here for the reasons above. |
+| One WorkOS organization per WhatsApp account | A session is scoped to one org, so a user with two accounts would need org switching; conflicts with `list_accounts` and the `account` argument. |
+| WorkOS FGA for per-account grants | Every check is an API call, adds a dependency to the hot path, and buys nothing at this scale. |
+| Per-account permissions or roles encoded in the token | Unclear whether a membership can hold several roles; and per-resource state in a token reintroduces revocation lag. |
+| Tailscale (or another private overlay) identity instead of AuthKit | A second identity system for one extra user; the owner already chose AuthKit. |
+
+## Consequences
+
+- Revocation of *account grants and chat visibility* is instant (DB). Revocation of *membership and role* lags by token lifetime, except where the admin UI re-checks live.
+- The app and WorkOS can disagree about who exists. Deleting someone from the app leaves them able to sign in at AuthKit but with no access; the invite/remove operation must keep the two in step.
+- The admin UI gains a public attack surface. Required with it: CSRF protection for the existing POST forms, a signed `SameSite` cookie, and per-request role lookup rather than trusting the cookie.
+- New secrets for the admin process only: a WorkOS API key and client credentials. The org id and extra redirect URI go through `workos/apply.sh`.
+- `docker-compose.yml`, `server/fly.toml`, the README and the root `CLAUDE.md` architecture table ("private only, always — no login of its own") must be updated by the implementing PR, not now, since nothing here is live yet.
+- Per-account WAHA session keys ([#52](https://github.com/anthonyangel/botsapp/issues/52)) are a separate decision (stored encrypted in the DB under `BOTSAPP_SECRET_KEY`, not in Fly secrets, because setting a Fly secret restarts the machine). Record it as 0027 when that work starts.
+
+## Open check before implementing
+
+Confirm that AuthKit places the single org and role in the tokens it issues automatically when a user has exactly one membership. That is expected for the browser login but is **not yet verified for MCP OAuth tokens**. Log in once and inspect the claims. It affects only whether the role can also be read from MCP tokens, which this design does not rely on.

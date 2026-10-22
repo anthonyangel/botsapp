@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0025.
+been kept in date order, current through 0026.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -47,7 +47,10 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
 - Multi-tenancy is in progress ([0025](docs/decisions/0025-multi-tenancy-users-accounts-grants.md)):
   users/accounts/grants/per-viewer `chat_access` are live; MCP tools resolve a
   per-caller scope (`server/src/botsapp/scope.py`). The admin UI is still
-  login-less and single-operator until phase 4. Needs `BOTSAPP_ADMIN_EMAIL`.
+  login-less and single-operator until it ships the AuthKit login decided in
+  [0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md)
+  (one WorkOS org, `admin`/`member` role in WorkOS; grants and chat visibility
+  stay in the DB). Needs `BOTSAPP_ADMIN_EMAIL`.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked
   server-side via `restrict_tag` (a scope no real auth token will ever carry)
   — this server is read-only by construction, not by convention. See

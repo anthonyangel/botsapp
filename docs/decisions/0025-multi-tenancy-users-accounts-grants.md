@@ -61,9 +61,9 @@ grow per NOWEB session, so size the Fly machine before adding one.
 - **Supersedes** the "admin-ui has no login of its own, private-only, always"
   invariant in [0004](0004-chat-allowlist-and-admin-ui.md) and
   [0013](0013-single-fly-app-shared-volume.md) — *once phase 4 ships*. Self-service
-  means she must reach and authenticate to the admin UI; the login mechanism
-  (AuthKit web session vs. a private overlay such as Tailscale identity) gets
-  its own record before that phase. Until then the admin UI is unchanged and
+  means she must reach and authenticate to the admin UI; the login mechanism is
+  decided in [0026](0026-admin-login-authkit-single-org-authn-authz-split.md)
+  (AuthKit web session). Until then the admin UI is unchanged and
   stays private, with the owner operating it.
 - **Supersedes** `allowed_emails` ([0015](0015-email-allowlist-in-db.md)) as the
   login gate (users table), keeping its "DB, not env var" reasoning.
