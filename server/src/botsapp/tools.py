@@ -500,12 +500,23 @@ def _resolve_choice(answers: Any, matches: list[Group]) -> GroupChoice:
 
     The answer is checked against the *current* matches rather than trusted: it
     arrives from the client, and the allowlist or the group list may have changed
-    since the question was asked.
+    since the question was asked. The result says what the client replied, so a
+    client that dismisses the picker (decline/cancel) is distinguishable from one
+    that accepted without a choice.
     """
     response = answers.get("group") if answers is not None else None
+    action = getattr(response, "action", None)
     content = getattr(response, "content", None)
-    if response is None or response.action != "accept" or not content:
-        return GroupChoice(status="cancelled", message="No group was chosen.")
+    if action != "accept":
+        return GroupChoice(
+            status="cancelled",
+            message=f"The client replied {action!r}, so no group was chosen.",
+        )
+    if not content:
+        return GroupChoice(
+            status="cancelled",
+            message="The client accepted but returned no choice.",
+        )
     chosen = content.get("group")
     if chosen == _NONE_OF_THESE:
         return GroupChoice(status="none_chosen", message="The user chose none of the options.")
@@ -548,8 +559,15 @@ async def choose_group(
         assert ctx is not None
         matches = await _find_groups(query=query, tags=tags)
         answers = ctx.input_responses
-        if answers is not None:
-            return _resolve_choice(answers, matches)
+        if answers is not None and "group" in answers:
+            choice = _resolve_choice(answers, matches)
+            logger.info("choose_group answered: status=%s", choice.status)
+            return choice
+        if answers:
+            # Responses that aren't ours: ask again rather than guess.
+            logger.warning(
+                "choose_group ignoring responses without a 'group' key: %s", sorted(answers)
+            )
         if not matches:
             return GroupChoice(status="no_match", message="No allowed group matches.")
         if len(matches) == 1:
@@ -573,6 +591,7 @@ async def choose_group(
             },
             "required": ["group"],
         }
+        logger.info("choose_group asking: %d options", len(matches))
         return InputRequiredResult(
             result_type="input_required",
             input_requests={
