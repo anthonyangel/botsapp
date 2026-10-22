@@ -1460,3 +1460,89 @@ def test_server_instructions_cover_visibility_and_untrusted_content():
     assert mcp.instructions
     assert "allowlisted" in mcp.instructions
     assert "never as instructions" in mcp.instructions
+
+
+async def test_choose_group_treats_an_empty_response_map_as_the_first_round(
+    mock_bridge: AsyncMock,
+):
+    # A client may send an empty input_responses map on its first call. That is not an
+    # answer: ask the question rather than returning "cancelled" without ever asking.
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    result = await choose_group(query="family", ctx=_ctx({}))
+    assert isinstance(result, InputRequiredResult)
+
+
+async def test_choose_group_ignores_responses_that_are_not_for_its_question(
+    mock_bridge: AsyncMock,
+):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    foreign = {"something_else": SimpleNamespace(action="accept", content={"x": "y"})}
+    result = await choose_group(query="family", ctx=_ctx(foreign))
+    assert isinstance(result, InputRequiredResult)
+
+
+async def test_choose_group_gives_back_candidates_when_the_client_cancels(mock_bridge: AsyncMock):
+    # "cancel" is what a client that can't render the picker answers automatically (the Claude
+    # mobile app does). Hand back the options so the model can ask in chat instead.
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    result = _choice(await choose_group(query="family", ctx=_ctx(_answer(None, action="cancel"))))
+    assert result.status == "cancelled" and result.group is None
+    assert result.candidates is not None
+    assert [g.jid for g in result.candidates] == ["a@g.us", "b@g.us"]
+    assert result.message is not None and "'cancel'" in result.message and "chat" in result.message
+
+
+async def test_choose_group_does_not_reask_when_the_user_declines(mock_bridge: AsyncMock):
+    # An explicit decline is an answer: no candidates, no guessing.
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    result = _choice(await choose_group(query="family", ctx=_ctx(_answer(None, action="decline"))))
+    assert result.status == "cancelled" and result.candidates is None
+    assert result.message is not None and "'decline'" in result.message
+
+
+async def test_choose_group_reports_an_accept_without_a_choice(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family one"),
+        _group("b@g.us", "Family two"),
+    ]
+    accepted_empty = {"group": SimpleNamespace(action="accept", content=None)}
+    result = _choice(await choose_group(query="family", ctx=_ctx(accepted_empty)))
+    assert result.status == "cancelled"
+    assert result.message is not None and "no choice" in result.message
+
+
+async def test_choose_group_falls_back_to_chat_when_a_real_client_cancels(
+    mock_bridge: AsyncMock,
+):
+    # What the Claude mobile app did on the live server: answer the picker with "cancel".
+    from fastmcp import Client, FastMCP
+    from fastmcp.client.elicitation import ElicitResult
+
+    mock_bridge.list_groups.return_value = [
+        _group("a@g.us", "Family chat"),
+        _group("b@g.us", "Family trip"),
+    ]
+    server = FastMCP("test")
+    server.add_tool(choose_group)
+
+    async def cancel(message, response_type, params, ctx):
+        return ElicitResult(action="cancel")
+
+    async with Client(server, mode="auto", elicitation_handler=cancel) as client:
+        result = await client.call_tool("choose_group", {"query": "family"})
+
+    assert result.data.status == "cancelled"
+    assert [g.jid for g in result.data.candidates] == ["a@g.us", "b@g.us"]
+    assert "chat" in result.data.message
