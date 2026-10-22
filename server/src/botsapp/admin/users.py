@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def _back(kind: str, text: str) -> RedirectResponse:
-    return RedirectResponse(url=f"/users?{urlencode({kind: text})}", status_code=303)
+def _back(kind: str, text: str, path: str = "/users") -> RedirectResponse:
+    return RedirectResponse(url=f"{path}?{urlencode({kind: text})}", status_code=303)
 
 
 def _form_text(form: FormData, key: str) -> str:
@@ -59,8 +59,9 @@ def _actor(request: Request) -> str:
     return request.state.user["email"]
 
 
-async def _live_admin_check(request: Request) -> Response | None:
-    """None if the caller is still an admin according to WorkOS, else a response."""
+async def live_admin_check(request: Request, back_to: str = "/users") -> Response | None:
+    """None if the caller is still an admin according to WorkOS, else a response
+    (a redirect with an error to ``back_to``, or a 403)."""
     cfg = auth.config
     assert cfg is not None
     if cfg.directory is None or cfg.dev_user:
@@ -69,7 +70,7 @@ async def _live_admin_check(request: Request) -> Response | None:
     try:
         role = await cfg.directory.get_role(actor)
     except DirectoryError as exc:
-        return _back("error", f"Couldn't verify your role with WorkOS: {exc}")
+        return _back("error", f"Couldn't verify your role with WorkOS: {exc}", back_to)
     bootstrap = os.environ.get("BOTSAPP_ADMIN_EMAIL", "").strip().lower()
     if role == "admin" or (role is None and actor == bootstrap):
         return None
@@ -101,7 +102,7 @@ async def invite_user(request: Request) -> Response:
         return _back("error", "Unknown role.")
     if await state.db.get_user(email) is not None:
         return _back("error", f"{email} is already a user.")
-    if refused := await _live_admin_check(request):
+    if refused := await live_admin_check(request):
         return refused
 
     invitation_id: str | None = None
@@ -136,7 +137,7 @@ async def remove_user(request: Request) -> Response:
         return _back(
             "error", f"{email} owns {owned} WhatsApp account(s); delete or transfer them first."
         )
-    if refused := await _live_admin_check(request):
+    if refused := await live_admin_check(request):
         return refused
 
     if directory is not None:
@@ -167,7 +168,7 @@ async def change_role(request: Request) -> Response:
     previous = "admin" if user["is_admin"] else "member"
     if role == previous:
         return _back("notice", f"{email} is already {role}.")
-    if refused := await _live_admin_check(request):
+    if refused := await live_admin_check(request):
         return refused
 
     if directory is not None:

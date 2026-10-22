@@ -56,6 +56,18 @@ class BridgeRegistry:
             self._clients[session] = client
         return client
 
+    async def create_session(self, account_id: str) -> None:
+        """Create the account's WAHA session (stopped, no QR yet)."""
+        await (await self.for_account(account_id)).create_session()
+
+    async def delete_session(self, account_id: str) -> None:
+        """Delete the account's WAHA session and drop the cached client. Call
+        before removing the account row — it resolves the session through it."""
+        client = await self.for_account(account_id)
+        await client.delete_session()
+        self._clients.pop(client._session_name, None)
+        await client.close()
+
     async def close(self) -> None:
         clients, self._clients = list(self._clients.values()), {}
         for client in clients:

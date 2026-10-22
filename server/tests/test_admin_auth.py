@@ -82,11 +82,18 @@ def client(monkeypatch, stub):
         state.bridge.list_groups.return_value = []
         state.bridge.get_contacts.return_value = []
         state.bridge.get_avatar_url.return_value = None
-        admin_app._raw_store = AsyncMock()
-        admin_app._raw_store.get_chats.return_value = []
+        state.bridge.get_chats.return_value = []
         state.db.get_user = AsyncMock(side_effect=lambda e: users.get(e))
-        state.db.get_account = AsyncMock(return_value={"owner_email": OWNER})
-        state.db.has_account_access = AsyncMock(side_effect=lambda _a, e: e in holders)
+        primary = {"id": "default", "label": "Primary", "owner_email": OWNER}
+        state.db.list_accounts = AsyncMock(return_value=[primary])
+        state.db.list_accounts_for_user = AsyncMock(
+            side_effect=lambda e: [primary] if e in holders else []
+        )
+
+        async def _bridge(_request):
+            return state.bridge
+
+        monkeypatch.setattr(admin_app, "_bridge", _bridge)
         state.db.list_users = AsyncMock(return_value=[])
         state.db.add_user = AsyncMock()
         state.db.remove_user = AsyncMock()
@@ -237,7 +244,7 @@ def test_session_pages_are_owner_or_admin_only(client):
 def test_chat_pages_need_access_to_the_account(client):
     _sign_in(client, GUEST)
     assert client.get("/chats").status_code == 200
-    state.db.has_account_access = AsyncMock(return_value=False)
+    state.db.list_accounts_for_user = AsyncMock(return_value=[])
     assert client.get("/chats").status_code == 403
 
 

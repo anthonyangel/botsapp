@@ -51,7 +51,8 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   [0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md)
   (built and tested against a stubbed WorkOS client; not yet verified live;
   one WorkOS org, role in WorkOS, grants and chat visibility in the DB). Its
-  pages still operate on the `default` account until the per-account pages land.
+  Session and Chats pages act on the account selected in the header (a validated
+  cookie); the Accounts and Users pages manage accounts, sharing and people.
   Needs `BOTSAPP_ADMIN_EMAIL`.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked
   server-side via `restrict_tag` (a scope no real auth token will ever carry)

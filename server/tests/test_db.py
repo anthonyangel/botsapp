@@ -289,3 +289,19 @@ async def test_cannot_remove_user_who_owns_an_account(db: DatabaseManager):
 async def test_account_requires_known_owner(db: DatabaseManager):
     with pytest.raises(ValueError):
         await db.add_account("x", "ghost@example.com", "acct-x")
+
+
+async def test_delete_account_removes_grants_and_all_viewers_access(db: DatabaseManager):
+    await _two_users(db)
+    await db.add_account("hers", "her@example.com", "acct-hers")
+    await db.grant_account("hers", "me@example.com")
+    await db.set_chat_access_allowed("hers", "me@example.com", "a@g.us", True)
+    await db.set_chat_access_allowed("hers", "her@example.com", "b@g.us", True)
+    await db.delete_account("hers")
+    assert await db.get_account("hers") is None
+    assert await db.list_grants("hers") == []
+    cursor = await db.connection.execute("SELECT COUNT(*) FROM chat_access WHERE account_id='hers'")
+    row = await cursor.fetchone()
+    assert row is not None and row[0] == 0
+    assert await db.get_account("default") is not None  # other accounts untouched
+    assert await db.get_user("her@example.com") is not None

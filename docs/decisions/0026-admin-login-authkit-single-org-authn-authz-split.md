@@ -1,6 +1,6 @@
 # 0026 — Admin login via AuthKit, one WorkOS organization, and the authn/authz split
 
-**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Users page implemented in #49 (below). Still to do: #50 (accounts/grants pages), #51 (self-service), #52 (scoped WAHA keys).
+**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Users page implemented in #49 (below). Accounts page implemented in #50 (below). Still to do: #51 (self-service), #52 (scoped WAHA keys).
 
 ## Context
 
@@ -80,6 +80,15 @@ What WorkOS can express was checked against its own docs ([FGA](https://workos.c
 - Ordering: invite = WorkOS then row (invitation revoked if the row can't be saved); remove = pre-checks (owns an account, is yourself) then WorkOS then row (idempotent, so retry heals a half-done removal); role = WorkOS then mirror (WorkOS role restored if the mirror write fails).
 - The acting admin's role is re-checked live against WorkOS on every change. The bootstrap admin is accepted when WorkOS has no role for them yet. There is no "last administrator" guard because the caller must be an admin and cannot target themselves.
 - Users are created on invite, before the invitation is accepted; they can't sign in until they accept. A pending invitation is not shown separately yet.
+
+## As built (#50, Accounts page)
+
+- `/accounts` lists the accounts you own (every account for an admin) with their WAHA session status and who they are shared with, plus accounts shared with you. Admins create and delete accounts; an owner or an admin grants and revokes. Revoking also deletes that viewer's chat access, so a re-grant starts empty. Asking about an account you don't own gets the same "Unknown account" as one that doesn't exist.
+- **Creating** adds the row, then creates an empty (stopped, NOWEB-store-enabled) WAHA session, and removes the row again if WAHA fails. **Deleting** removes the WAHA session first (a missing one is fine), then the row with its grants and chat access. The `default` account can't be deleted. Both re-check the acting admin's role live like the Users page.
+- **Account selection.** The Session and Chats pages now act on the account in the `botsapp_account` cookie, validated on every request against what the user may select (their own and shared accounts; every account for an admin). With no valid cookie the choice falls back to an account the user *owns* (the default if it's theirs), then one shared with them. The header gets an account switcher when there is more than one choice, and hides Users for non-admins.
+- An admin can select any account and so pair or reset its session, but holds no grant and therefore sees no chats there; the Chats pages need a real grant.
+- Session creation uses `POST /api/sessions` with `start: false`, and pairing later relies on `restart` of a STOPPED session. Neither multi-session creation nor that restart path has been run against a live WAHA (#47).
+- The select link is a GET that sets a preference cookie; it grants nothing (every request revalidates), so a cross-site trigger can only change which of the user's own accounts is shown.
 
 ## Open check before implementing
 

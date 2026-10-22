@@ -217,6 +217,14 @@ class DatabaseManager:
         )
         await self.connection.commit()
 
+    async def delete_account(self, account_id: str) -> None:
+        """Remove an account with its grants and every viewer's chat access.
+        The caller deletes the WAHA session first (see BridgeRegistry)."""
+        await queries.delete_account_grants(self.connection, account_id=account_id)
+        await queries.delete_account_chat_access(self.connection, account_id=account_id)
+        await queries.delete_account(self.connection, account_id=account_id)
+        await self.connection.commit()
+
     async def get_account(self, account_id: str) -> dict[str, Any] | None:
         row = await queries.get_account(self.connection, id=account_id)
         return dict(row) if row else None

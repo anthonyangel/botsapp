@@ -1,6 +1,7 @@
 """BridgeRegistry: account -> its own WAHA session client (0025 phase 2)."""
 
 from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -47,3 +48,22 @@ def test_session_name_for_is_url_safe():
     assert session_name_for("Her Phone!") == "acct-her-phone"
     with pytest.raises(ValueError):
         session_name_for("!!!")
+
+
+async def test_delete_session_removes_it_in_waha_and_forgets_the_client(db: DatabaseManager):
+    registry = BridgeRegistry(db, "http://waha:3000", "key")
+    client = await registry.for_account("her")
+    client.delete_session = AsyncMock()
+    await registry.delete_session("her")
+    client.delete_session.assert_awaited_once()
+    assert await registry.for_account("her") is not client  # rebuilt, not cached
+    await registry.close()
+
+
+async def test_create_session_delegates_to_the_accounts_client(db: DatabaseManager):
+    registry = BridgeRegistry(db, "http://waha:3000", "key")
+    client = await registry.for_account("her")
+    client.create_session = AsyncMock()
+    await registry.create_session("her")
+    client.create_session.assert_awaited_once()
+    await registry.close()

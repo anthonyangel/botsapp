@@ -59,8 +59,14 @@ def client(monkeypatch):
         # Sign in as an admin who owns the default account (auth is covered
         # in test_admin_auth.py); chat_db stands in for the per-viewer handle.
         state.db.get_user = AsyncMock(return_value={"email": "admin@example.com", "is_admin": True})
-        state.db.get_account = AsyncMock(return_value={"owner_email": "admin@example.com"})
-        state.db.has_account_access = AsyncMock(return_value=True)
+        primary = {"id": "default", "label": "Primary", "owner_email": "admin@example.com"}
+        state.db.list_accounts_for_user = AsyncMock(return_value=[primary])
+        state.db.list_accounts = AsyncMock(return_value=[primary])
+
+        async def _bridge(_request):
+            return state.bridge
+
+        monkeypatch.setattr(admin_app, "_bridge", _bridge)
         chat_db = AsyncMock()
         chat_db.get_chat_metadata.return_value = None
         monkeypatch.setattr(admin_app, "_chat_db", lambda _request: chat_db)
@@ -69,8 +75,7 @@ def client(monkeypatch):
         # docstring) — reset between tests so one test's community jid
         # can't leak into the next's redirect-tab lookup.
         admin_app._community_jids.clear()
-        admin_app._raw_store = AsyncMock()
-        admin_app._raw_store.get_chats.return_value = []
+        state.bridge.get_chats.return_value = []
         yield c
 
 
@@ -158,7 +163,7 @@ def test_chats_page_shows_not_connected_state_when_logged_out(client):
 
 
 def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "155@s.whatsapp.net", "name": "155"},
     ]
     state.bridge.get_contacts.return_value = [
@@ -174,7 +179,7 @@ def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
 def test_chats_page_lists_groups_from_live_bridge_list_even_without_history(client):
     # No message history for this group at all — still must appear, since
     # you should be able to allow a group before it's ever posted anything.
-    admin_app._raw_store.get_chats.return_value = []
+    state.bridge.get_chats.return_value = []
     state.bridge.list_groups.return_value = [
         GroupInfo(
             jid="g1@g.us",
@@ -224,7 +229,7 @@ def test_chats_page_shows_groups_loaded_gap(client):
     # know about far more group *chats* (every real group jid ends
     # "@g.us") than it has full group metadata for. Surface the gap
     # instead of silently under-showing.
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "g1@g.us", "name": "g1"},
         {"jid": "g2@g.us", "name": "g2"},  # no metadata from list_groups()
     ]
@@ -236,7 +241,7 @@ def test_chats_page_shows_groups_loaded_gap(client):
 
 
 def test_chats_page_hides_groups_loaded_note_once_caught_up(client):
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "g1@g.us", "name": "g1"},
     ]
     state.bridge.list_groups.return_value = [
@@ -256,7 +261,7 @@ def test_chats_page_hides_status_tab_when_never_seen(client):
 
 
 def test_chats_page_shows_status_tab_when_seen(client):
-    admin_app._raw_store.get_chats.return_value = [{"jid": "status@broadcast", "name": ""}]
+    state.bridge.get_chats.return_value = [{"jid": "status@broadcast", "name": ""}]
     r = client.get("/chats")
     assert "Status/Stories" in r.text
     assert ">Status<" in r.text
@@ -265,7 +270,7 @@ def test_chats_page_shows_status_tab_when_seen(client):
 def test_chats_page_separates_newsletters_into_their_own_tab(client):
     # @newsletter (WhatsApp Channels) jids must not be lumped into the
     # direct-chats tab — they get their own, alongside Chats/Groups.
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "123@newsletter", "name": "Tech News"},
         {"jid": "155@s.whatsapp.net", "name": "155"},
     ]
@@ -277,7 +282,7 @@ def test_chats_page_separates_newsletters_into_their_own_tab(client):
 
 
 def test_chats_page_shows_country_flag_for_direct_chat(client):
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "972501234567@s.whatsapp.net", "name": "972501234567"},
     ]
     r = client.get("/chats")
@@ -287,7 +292,7 @@ def test_chats_page_shows_country_flag_for_direct_chat(client):
 
 def test_chats_page_omits_country_flag_for_unresolvable_jid(client):
     # An @lid contact never resolved to a phone jid — no crash, just no flag.
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "12345@lid", "name": "Mystery"},
     ]
     r = client.get("/chats")

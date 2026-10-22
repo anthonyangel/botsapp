@@ -239,3 +239,12 @@ WHERE account_id = :account_id AND viewer_email = :viewer_email AND is_allowed =
 INSERT INTO chat_access (account_id, viewer_email, jid, tags, is_allowed, updated_at)
 SELECT :account_id, :viewer_email, jid, tags, is_allowed, updated_at FROM chat_metadata WHERE true
 ON CONFLICT (account_id, viewer_email, jid) DO NOTHING;
+
+-- name: delete_account_grants!
+DELETE FROM grants WHERE account_id = :account_id;
+
+-- name: delete_account_chat_access!
+DELETE FROM chat_access WHERE account_id = :account_id;
+
+-- name: delete_account!
+DELETE FROM accounts WHERE id = :account_id;

@@ -7,10 +7,10 @@ chat_metadata database and WAHA's own storage, never a Python process.
 Every route except the login ones sits behind admin/auth.py's AuthKit login
 (docs/decisions/0026); only LOCAL_DEV_DISABLE_AUTH turns that off, for local
 development. Until the per-account pages land (#51) these pages operate on the
-``default`` account.
+selected account (the ``botsapp_account`` cookie; see admin/auth.py).
 
-Uses state.bridge + the raw MessageStore from bridge_factory, same as the
-MCP server. The active provider is shown in the page header so it's never
+Uses the selected account's client from state.registry (also the raw
+MessageStore), same as the MCP server. The active provider is shown in the page header so it's never
 ambiguous which one you're looking at.
 """
 
@@ -31,21 +31,14 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Route
 
 import botsapp.state as state
-from botsapp.admin import auth, templates, users
-from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store
+from botsapp.admin import accounts, auth, templates, users
+from botsapp.bridge_factory import bridge_provider_name, build_registry
 from botsapp.db import DatabaseManager
-from botsapp.message_store import MessageStore
 from botsapp.scope import ScopedChatDb
 from botsapp.session import connect_or_get_status, get_status
 from botsapp.waha_client import WAHAClient
 
 logger = logging.getLogger(__name__)
-
-# The *unfiltered* store — deliberately not AllowlistedMessageStore, since
-# this UI's whole purpose is to see (and allow) chats that aren't allowed
-# yet. Set during the app's own lifespan; this process never touches the
-# MCP server's state.message_store.
-_raw_store: MessageStore | None = None
 
 STATUS_BROADCAST_JID = "status@broadcast"
 
@@ -60,7 +53,6 @@ _community_jids: set[str] = set()
 
 @asynccontextmanager
 async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-    global _raw_store
     auth.config = auth.config_from_env()  # fails loudly if login isn't configured
     state.db = DatabaseManager(os.environ["DATABASE_URL"])  # a SQLite file path
     await state.db.connect()
@@ -72,21 +64,18 @@ async def lifespan(_app: Starlette) -> AsyncIterator[None]:
     else:
         logger.error("BOTSAPP_ADMIN_EMAIL is not set: no user will be an admin or own an account")
 
-    bridge, raw_store = build_bridge_and_store()
-    state.bridge = bridge
-    _raw_store = raw_store
+    state.registry = build_registry(state.db)
     logger.info("Admin UI ready (bridge: %s)", bridge_provider_name())
 
     yield
 
-    await state.bridge.close()
+    await state.registry.close()
     await state.db.close()
     state.db = None
-    state.bridge = None
+    state.registry = None
     if auth.config is not None:
         await auth.config.aclose()
     auth.config = None
-    _raw_store = None
 
 
 def _classify(jid: str) -> str:
@@ -127,82 +116,80 @@ def _country_flag(jid: str) -> str:
     return f"{flag} +{phonenumbers.country_code_for_region(region)}"
 
 
+async def _bridge(request: Request) -> WAHAClient:
+    """The selected account's WhatsApp client. It is also the *unfiltered*
+    MessageStore — deliberately not AllowlistedMessageStore, since this UI's
+    whole purpose is to see (and allow) chats that aren't allowed yet."""
+    assert state.registry is not None
+    return await state.registry.for_account(request.state.account)
+
+
 def _chat_db(request: Request) -> ScopedChatDb:
-    """Chat allowlist/tags for the signed-in user on the ``default`` account —
+    """Chat allowlist/tags for the signed-in user on the selected account —
     the same (account, viewer) an MCP call from that user resolves to."""
     assert state.db is not None
-    return ScopedChatDb(state.db, auth.DEFAULT_ACCOUNT_ID, request.state.user["email"])
+    return ScopedChatDb(state.db, request.state.account, request.state.user["email"])
 
 
-async def _poll_status() -> dict[str, Any]:
+async def _poll_status(request: Request) -> dict[str, Any]:
     """Status only — never triggers a connect. Calling the bridge's connect
     on every page view/poll was the actual bug behind "QR linking isn't
     working": each reload issued a fresh QR and killed the bridge's channel
     for whichever QR was already mid-scan. get_status() is safe to call as
     often as we like; connect_or_get_status() (which does call connect) is
     reserved for the explicit "Connect WhatsApp" button below."""
-    assert state.bridge is not None
-    status = await get_status(state.bridge)
-    return asdict(status)
+    return asdict(await get_status(await _bridge(request)))
 
 
-async def session_index(_request: Request) -> Response:
-    status = await _poll_status()
+async def session_index(request: Request) -> Response:
+    status = await _poll_status(request)
     return HTMLResponse(templates.session_page(status, bridge_provider_name()))
 
 
-async def session_status_json(_request: Request) -> Response:
+async def session_status_json(request: Request) -> Response:
     """Polled by the QR-waiting page client-side (see templates.session_page)
     to refresh the QR/connected state in place, without reloading / and
     without ever re-triggering connect."""
-    return JSONResponse(await _poll_status())
+    return JSONResponse(await _poll_status(request))
 
 
-async def session_connect(_request: Request) -> Response:
+async def session_connect(request: Request) -> Response:
     """The only route that actually calls the bridge's connect — a
     deliberate user action (button click), not an automatic side effect of
     viewing or polling the session page."""
-    assert state.bridge is not None
-    await connect_or_get_status(state.bridge)
+    await connect_or_get_status(await _bridge(request))
     return RedirectResponse(url="/", status_code=303)
 
 
-async def session_disconnect(_request: Request) -> Response:
+async def session_disconnect(request: Request) -> Response:
     """Log out of WhatsApp (WAHA logout endpoint). Leaves the session in
     STOPPED state so the user can immediately hit Connect WhatsApp and
     re-pair with a fresh QR."""
-    assert state.bridge is not None
-    await state.bridge.disconnect()
+    await (await _bridge(request)).disconnect()
     return RedirectResponse(url="/", status_code=303)
 
 
-async def session_delete(_request: Request) -> Response:
+async def session_delete(request: Request) -> Response:
     """Nuclear option: delete the WAHA session entirely (removes all
     persisted auth material). Use this when logout alone isn't enough to
     escape a stuck WORKING state. After deletion, Connect WhatsApp will
     create a fresh session and show a new QR code."""
-    assert state.bridge is not None
-    if isinstance(state.bridge, WAHAClient):
-        try:
-            await state.bridge._request("DELETE", f"/api/sessions/{state.bridge._session_name}")
-        except Exception as exc:
-            logger.warning("session delete failed: %s", exc)
-    else:
-        # Non-WAHA bridge: just try a normal logout.
-        await state.bridge.disconnect()
+    try:
+        await (await _bridge(request)).delete_session()
+    except Exception as exc:
+        logger.warning("session delete failed: %s", exc)
     return RedirectResponse(url="/", status_code=303)
 
 
 async def chats_index(request: Request) -> Response:
-    assert state.bridge is not None
-    assert _raw_store is not None
+    bridge = await _bridge(request)
     chat_db = _chat_db(request)
 
-    session_status = await get_status(state.bridge)
+    session_status = await get_status(bridge)
     if not session_status.logged_in:
         return HTMLResponse(templates.not_connected_page(bridge_provider_name()))
 
-    all_chats = await _raw_store.get_chats(limit=1000, offset=0)
+    all_chats = await bridge.get_chats(limit=1000, offset=0)
     direct_chats = [c for c in all_chats if _classify(c["jid"]) == "direct"]
     newsletter_chats = [c for c in all_chats if _classify(c["jid"]) == "newsletter"]
     group_jids_with_history = {c["jid"] for c in all_chats if _classify(c["jid"]) == "group"}
@@ -210,7 +197,7 @@ async def chats_index(request: Request) -> Response:
 
     # ── Direct chats: enrich with the bridge's own contact names + avatars ─
     try:
-        contacts = {c.jid: c for c in await state.bridge.get_contacts()}
+        contacts = {c.jid: c for c in await bridge.get_contacts()}
     except Exception as exc:
         logger.warning("get_contacts failed while building admin chat list: %s", exc)
         contacts = {}
@@ -218,9 +205,7 @@ async def chats_index(request: Request) -> Response:
     # Pass the full jid, not just the number — a bridge needs the suffix
     # to tell an @lid (privacy-preserving id) contact from a plain phone
     # number; each bridge's own get_avatar_url translates it as needed.
-    direct_avatars = await asyncio.gather(
-        *(state.bridge.get_avatar_url(c["jid"]) for c in direct_chats)
-    )
+    direct_avatars = await asyncio.gather(*(bridge.get_avatar_url(c["jid"]) for c in direct_chats))
     direct_rows: list[dict[str, Any]] = []
     for chat, avatar in zip(direct_chats, direct_avatars, strict=True):
         jid = chat["jid"]
@@ -245,7 +230,7 @@ async def chats_index(request: Request) -> Response:
     # contact-name enrichment — WAHA's own chat "name" (the channel name)
     # is already the right display name ────────────────────────────────────
     newsletter_avatars = await asyncio.gather(
-        *(state.bridge.get_avatar_url(c["jid"]) for c in newsletter_chats)
+        *(bridge.get_avatar_url(c["jid"]) for c in newsletter_chats)
     )
     newsletter_rows: list[dict[str, Any]] = []
     for chat, avatar in zip(newsletter_chats, newsletter_avatars, strict=True):
@@ -265,7 +250,7 @@ async def chats_index(request: Request) -> Response:
     # with history, so a group with zero messages so far can still be
     # allowed ──────────────────────────────────────────────────────────────
     try:
-        groups = await state.bridge.list_groups()
+        groups = await bridge.list_groups()
     except Exception as exc:
         logger.warning("list_groups failed while building admin group list: %s", exc)
         groups = []
@@ -299,9 +284,7 @@ async def chats_index(request: Request) -> Response:
     _community_jids.clear()
     _community_jids.update(g.jid for g in community_groups)
 
-    group_avatars = await asyncio.gather(
-        *(state.bridge.get_avatar_url(g.jid) for g in regular_groups)
-    )
+    group_avatars = await asyncio.gather(*(bridge.get_avatar_url(g.jid) for g in regular_groups))
     group_rows: list[dict[str, Any]] = []
     for g, avatar in zip(regular_groups, group_avatars, strict=True):
         meta = await chat_db.get_chat_metadata(jid=g.jid) or {}
@@ -319,7 +302,7 @@ async def chats_index(request: Request) -> Response:
         )
 
     community_avatars = await asyncio.gather(
-        *(state.bridge.get_avatar_url(g.jid) for g in community_groups)
+        *(bridge.get_avatar_url(g.jid) for g in community_groups)
     )
     community_rows: list[dict[str, Any]] = []
     for g, avatar in zip(community_groups, community_avatars, strict=True):
@@ -427,6 +410,12 @@ app = Starlette(
         Route("/users/{email}/role", users.change_role, methods=["POST"]),
         Route("/users/{email}/remove", users.remove_user, methods=["POST"]),
         Route("/access", access_redirect),
+        Route("/accounts", accounts.accounts_index),
+        Route("/accounts/create", accounts.create_account, methods=["POST"]),
+        Route("/accounts/{account_id}/select", accounts.select_account),
+        Route("/accounts/{account_id}/grant", accounts.grant_account, methods=["POST"]),
+        Route("/accounts/{account_id}/revoke", accounts.revoke_account, methods=["POST"]),
+        Route("/accounts/{account_id}/delete", accounts.delete_account, methods=["POST"]),
         *auth.routes,
     ],
     middleware=[Middleware(auth.AuthMiddleware)],

@@ -15,13 +15,18 @@ and have not yet been exercised against a live environment.
 
 Route policy (``_policy``):
 
-* ``/users`` (and legacy ``/access``) — admins only
-* ``/`` and ``/session/*``         — the account's owner, or an admin
-* ``/chats*``                      — anyone holding the account
+* ``/users`` (and legacy ``/access``)           — admins only
+* ``/accounts/create``, ``/accounts/*/delete`` — admins only
+* ``/accounts*`` (list, grant, revoke, select) — any user; handlers check that
+  the account in the path is theirs (owner) or that they are an admin
+* ``/`` and ``/session/*``         — the selected account's owner, or an admin
+* ``/chats*``                      — anyone holding the selected account
 * ``/login``, ``/auth/callback``, ``/logout`` — public
 
-Until the self-service pages (#51) add an account switcher, the existing pages
-operate on the ``default`` account.
+Which account the session/chats pages act on is the ``botsapp_account`` cookie
+(set by ``/accounts/<id>/select``), validated on every request against what the
+user may select: their own and granted accounts, plus every account for an admin
+(who can then pair or reset a session but, holding no grant, sees no chats).
 
 CSRF: the session cookie is ``SameSite=Lax`` and every state-changing request
 must carry an ``Origin`` (or ``Referer``) matching this host. The hand-rolled
@@ -55,6 +60,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_ACCOUNT_ID = "default"
 SESSION_COOKIE = "botsapp_session"
+ACCOUNT_COOKIE = "botsapp_account"
 STATE_COOKIE = "botsapp_oauth"
 SESSION_TTL_SECONDS = 8 * 60 * 60
 STATE_TTL_SECONDS = 10 * 60
@@ -255,6 +261,10 @@ def _safe_next(target: str | None) -> str:
 def _policy(path: str) -> str:
     if path.startswith(("/users", "/access")):
         return "admin"
+    if path == "/accounts/create" or (path.startswith("/accounts/") and path.endswith("/delete")):
+        return "admin"
+    if path.startswith("/accounts"):
+        return "user"  # the handlers check ownership of the account in the path
     if path == "/" or path.startswith("/session"):
         return "owner"
     return "member"
@@ -303,16 +313,54 @@ class AuthMiddleware(BaseHTTPMiddleware):
         policy = _policy(request.url.path)
         if policy == "admin" and not user["is_admin"]:
             return _denied(403, "Administrators only.")
-        if policy in ("owner", "member"):
-            if not await state.db.has_account_access(DEFAULT_ACCOUNT_ID, email):
-                return _denied(403, "You don't have access to this WhatsApp account.")
-            if policy == "owner" and not user["is_admin"]:
-                account = await state.db.get_account(DEFAULT_ACCOUNT_ID)
-                if account is None or account["owner_email"] != email:
-                    return _denied(403, "Only the account's owner can manage its session.")
+
+        mine = await state.db.list_accounts_for_user(email)
+        selectable = await state.db.list_accounts() if user["is_admin"] else mine
+        account_id = _resolve_account(request, email, mine, selectable)
+        if policy == "owner":
+            account = next((a for a in selectable if a["id"] == account_id), None)
+            if account is None:
+                return _denied(403, "You don't have a WhatsApp account yet.")
+            if not user["is_admin"] and account["owner_email"] != email:
+                return _denied(403, "Only the account's owner can manage its session.")
+        elif policy == "member" and account_id not in {a["id"] for a in mine}:
+            return _denied(403, "You don't have access to a WhatsApp account.")
 
         request.state.user = user
-        return await call_next(request)
+        request.state.account = account_id
+        token = templates.nav.set(
+            templates.NavContext(
+                email=email,
+                is_admin=bool(user["is_admin"]),
+                accounts=tuple((a["id"], a["label"] or a["id"]) for a in selectable),
+                account=account_id or "",
+            )
+        )
+        try:
+            return await call_next(request)
+        finally:
+            templates.nav.reset(token)
+
+
+def _resolve_account(
+    request: Request, email: str, mine: list[dict[str, Any]], selectable: list[dict[str, Any]]
+) -> str | None:
+    """The account this request acts on: the cookie if the user may select it,
+    else one they own (the default if it's theirs), else one shared with them,
+    else (admins) the first overall. Owned comes first so someone who owns an
+    account and has also been granted the default lands on their own."""
+    ids = {a["id"] for a in selectable}
+    chosen = request.cookies.get(ACCOUNT_COOKIE)
+    if chosen in ids:
+        return chosen
+    owned = [a["id"] for a in mine if a["owner_email"] == email]
+    shared = [a["id"] for a in mine if a["owner_email"] != email]
+    for group in (owned, shared):
+        if DEFAULT_ACCOUNT_ID in group:
+            return DEFAULT_ACCOUNT_ID
+        if group:
+            return group[0]
+    return next(iter(sorted(ids)), None)
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────

@@ -11,6 +11,8 @@ html.escape before landing in markup.
 
 import html
 import json
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
@@ -100,6 +102,47 @@ _EXTRA_CSS = """
 """
 
 
+@dataclass(frozen=True)
+class NavContext:
+    """Who is looking and which account they're acting on, set per request by
+    admin/auth.py's middleware so every page's header can reflect it without
+    each page function growing parameters. The default shows everything."""
+
+    email: str = ""
+    is_admin: bool = True
+    accounts: tuple[tuple[str, str], ...] = ()  # (id, label) the user can select
+    account: str = ""
+
+
+_DEFAULT_NAV = NavContext()  # frozen, so safe as a shared default
+nav: ContextVar[NavContext] = ContextVar("admin_nav", default=_DEFAULT_NAV)
+
+
+def _nav_html() -> str:
+    ctx = nav.get()
+    links = [
+        '<a class="mdl-navigation__link" href="/">Session</a>',
+        '<a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>',
+        '<a class="mdl-navigation__link" href="/accounts">Accounts</a>',
+    ]
+    if ctx.is_admin:
+        links.append('<a class="mdl-navigation__link" href="/users">Users</a>')
+    links.append('<a class="mdl-navigation__link" href="/logout">Sign out</a>')
+    switcher = ""
+    if len(ctx.accounts) > 1:
+        options = "".join(
+            f'<option value="{html.escape(i, quote=True)}"'
+            f"{' selected' if i == ctx.account else ''}>{html.escape(label)}</option>"
+            for i, label in ctx.accounts
+        )
+        switcher = (
+            '<select aria-label="Account" style="margin-right:16px" '
+            "onchange=\"location.href='/accounts/'+encodeURIComponent(this.value)+'/select'\">"
+            f"{options}</select>"
+        )
+    return switcher + "".join(links)
+
+
 def _page(title: str, body: str, bridge_name: str = "") -> str:
     bridge_badge = (
         f'<span class="badge bridge-badge">{html.escape(bridge_name.upper())}</span>'
@@ -123,12 +166,7 @@ def _page(title: str, body: str, bridge_name: str = "") -> str:
       <div class="mdl-layout__header-row">
         <span class="mdl-layout-title">WhatsApp Admin {bridge_badge}</span>
         <div class="mdl-layout-spacer"></div>
-        <nav class="mdl-navigation">
-          <a class="mdl-navigation__link" href="/">Session</a>
-          <a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>
-          <a class="mdl-navigation__link" href="/users">Users</a>
-          <a class="mdl-navigation__link" href="/logout">Sign out</a>
-        </nav>
+        <nav class="mdl-navigation">{_nav_html()}</nav>
       </div>
     </header>
     <main class="mdl-layout__content">
@@ -1064,3 +1102,118 @@ def users_page(
       </table>
     </div>"""
     return _page("Users", body, bridge_name)
+
+
+_CARD_STYLE = "width:100%;max-width:560px;padding:16px 24px;margin-bottom:16px;"
+
+
+def _grant_row(account_id: str, email: str) -> str:
+    aid = html.escape(quote(account_id, safe=""), quote=True)
+    return f"""
+      <li style="display:flex;align-items:center;gap:8px;">
+        <span>{html.escape(email)}</span>
+        <form method="post" action="/accounts/{aid}/revoke"
+              onsubmit="return confirm('Revoke access? They stop seeing this account at once.');">
+          <input type="hidden" name="email" value="{html.escape(email, quote=True)}">
+          <button class="mdl-button mdl-js-button mdl-button--icon" type="submit" title="Revoke">
+            <i class="material-icons">close</i>
+          </button>
+        </form>
+      </li>"""
+
+
+def _account_card(row: dict[str, Any], current: str) -> str:
+    aid = html.escape(quote(row["id"], safe=""), quote=True)
+    label = html.escape(row["label"])
+    badge = ' <span class="badge">selected</span>' if row["id"] == current else ""
+    grants = "".join(_grant_row(row["id"], e) for e in row["granted"])
+    grants = (
+        f'<ul style="list-style:none;padding:0;margin:8px 0;">{grants}</ul>'
+        if grants
+        else ('<p class="tab-note">Not shared with anyone.</p>')
+    )
+    options = "".join(
+        f'<option value="{html.escape(u, quote=True)}">{html.escape(u)}</option>'
+        for u in row["grantable"]
+    )
+    grant_form = (
+        f"""
+      <form method="post" action="/accounts/{aid}/grant" style="display:flex;gap:8px;">
+        <select name="email" required>{options}</select>
+        <button class="mdl-button mdl-js-button mdl-button--raised" type="submit">Share</button>
+      </form>"""
+        if options
+        else ""
+    )
+    delete = (
+        f"""
+      <form method="post" action="/accounts/{aid}/delete" style="margin-top:12px;"
+            onsubmit="return confirm('Delete this account and its WhatsApp session?');">
+        <button class="mdl-button mdl-js-button" type="submit">Delete account</button>
+      </form>"""
+        if row["deletable"]
+        else ""
+    )
+    return f"""
+    <div class="mdl-card mdl-shadow--2dp" style="{_CARD_STYLE}">
+      <h5 style="margin:0;">{label}{badge}</h5>
+      <p class="tab-note">id <code>{html.escape(row["id"])}</code> · owner
+        {html.escape(row["owner"])} · WhatsApp: <b>{html.escape(row["status"])}</b></p>
+      <p><a href="/accounts/{aid}/select">Use this account</a></p>
+      <b>Shared with</b>
+      {grants}
+      {grant_form}
+      {delete}
+    </div>"""
+
+
+def accounts_page(
+    rows: list[dict[str, Any]],
+    shared: list[tuple[str, str, str]],
+    users: list[str],
+    is_admin: bool,
+    current: str,
+    notice: str = "",
+    error: str = "",
+    bridge_name: str = "",
+) -> str:
+    """WhatsApp accounts you own (all of them, for an admin), who they are shared
+    with, and which one the Session and Chats pages act on."""
+    flash = ""
+    if notice:
+        flash += f'<p class="tab-note" role="status">{html.escape(notice)}</p>'
+    if error:
+        flash += f'<p class="tab-note" role="alert" style="color:#b00020">{html.escape(error)}</p>'
+    create = ""
+    if is_admin:
+        owners = "".join(
+            f'<option value="{html.escape(u, quote=True)}">{html.escape(u)}</option>' for u in users
+        )
+        create = f"""
+    <div class="mdl-card mdl-shadow--2dp" style="{_CARD_STYLE}">
+      <b>New account</b>
+      <form method="post" action="/accounts/create"
+            style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+        <input class="mdl-textfield__input" style="width:140px" name="id"
+               placeholder="id, e.g. sam" required>
+        <input class="mdl-textfield__input" style="width:160px" name="label" placeholder="label">
+        <select name="owner" required>{owners}</select>
+        <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
+                type="submit">Create</button>
+      </form>
+      <p class="tab-note">Creates the account and an empty WhatsApp session. The owner then
+        selects it and pairs it from the Session page.</p>
+    </div>"""
+    cards = "".join(_account_card(r, current) for r in rows) or (
+        "<p class='tab-note'>You don't own any account yet.</p>"
+    )
+    shared_list = ""
+    if shared:
+        items = "".join(
+            f'<li><a href="/accounts/{html.escape(quote(i, safe=""), quote=True)}/select">'
+            f"{html.escape(label)}</a> — shared by {html.escape(owner)}</li>"
+            for i, label, owner in shared
+        )
+        shared_list = f"<h5>Shared with you</h5><ul>{items}</ul>"
+    body = f"{flash}{create}{cards}{shared_list}"
+    return _page("Accounts", body, bridge_name)
