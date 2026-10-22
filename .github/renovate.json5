@@ -37,34 +37,41 @@
   vulnerabilityAlerts: { enabled: true, labels: ["dependencies", "security"], schedule: ["at any time"] },
   osvVulnerabilityAlerts: true,
 
-  // uv.lock refresh: transitive bumps within existing constraints.
+  // Monthly refresh of transitive pins only. Direct dependencies arrive through
+  // the grouped weekly PR below, so the two don't produce overlapping PRs.
   lockFileMaintenance: {
     enabled: true,
     schedule: ["before 6am on the first day of the month"],
   },
 
-  // pyproject.toml uses ">=" floors and uv.lock holds the real pins, so by
-  // default only the lockfile moves; floors are raised only when needed.
-  pep621: { rangeStrategy: "update-lockfile" },
+  // Keep the ">=" floors in pyproject.toml in step with what uv.lock resolves,
+  // so a minor/patch bump shows up as a pyproject.toml change, not a silent
+  // lockfile-only change.
+  pep621: { rangeStrategy: "bump" },
 
   customManagers: [
     {
       // `image = "devlikeapro/waha:dev"` in waha/fly.toml (no built-in Fly manager).
+      // The whole match is what gets replaced, so autoReplaceStringTemplate must
+      // rebuild the full `image = "..."` text — without it Renovate can't add a
+      // pinned digest and fails with "update failure". currentDigest is captured
+      // so later digest bumps work too.
+      // (docker-compose.yml's `${WAHA_IMAGE:-devlikeapro/waha:dev-arm}` default is
+      // deliberately NOT tracked: it's a local arm64 dev tag, and Handlebars can't
+      // express the closing `}` after the optional digest.)
       customType: "regex",
       managerFilePatterns: ["/(^|/)waha/fly\\.toml$/"],
-      matchStrings: ['image\\s*=\\s*"(?<depName>[^":\\s]+):(?<currentValue>[^"\\s]+)"'],
-      datasourceTemplate: "docker",
-    },
-    {
-      // `${WAHA_IMAGE:-devlikeapro/waha:dev-arm}` default in docker-compose.yml,
-      // which the docker-compose manager can't read through the ${...} syntax.
-      customType: "regex",
-      managerFilePatterns: ["/(^|/)docker-compose\\.ya?ml$/"],
-      matchStrings: ["\\$\\{WAHA_IMAGE:-(?<depName>[^:}\\s]+):(?<currentValue>[^}\\s]+)\\}"],
+      matchStrings: [
+        'image\\s*=\\s*"(?<depName>[^":@\\s]+):(?<currentValue>[^"@\\s]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"',
+      ],
+      autoReplaceStringTemplate:
+        'image = "{{{depName}}}:{{{newValue}}}{{#if newDigest}}@{{{newDigest}}}{{/if}}"',
       datasourceTemplate: "docker",
     },
   ],
 
+  // Later rules win, so the specific ones (MCP, Python, WAHA) come after the
+  // general groups.
   packageRules: [
     {
       description: "GitHub Actions: one PR for all action bumps",
@@ -73,39 +80,35 @@
       addLabels: ["ci"],
     },
     {
-      description: "Python dev tooling (lint/type/test) moves together",
+      description: "Python: minor and patch updates, runtime and dev tooling, in ONE PR",
       matchManagers: ["pep621"],
-      matchDepTypes: ["project.optional-dependencies"],
-      groupName: "Python dev tooling",
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "Python dependencies",
       addLabels: ["python"],
     },
     {
-      description: "Python runtime deps: separate from dev tooling",
+      description: "Python: majors get their own PR each (never batched)",
       matchManagers: ["pep621"],
-      matchDepTypes: ["project.dependencies"],
+      matchUpdateTypes: ["major"],
       addLabels: ["python"],
     },
     {
-      description: "MCP stack: review each bump, it defines the public protocol surface",
+      description: "MCP stack: every bump is reviewed on its own, it defines the public protocol surface",
       matchPackageNames: ["fastmcp", "mcp"],
       groupName: "MCP stack",
       addLabels: ["mcp"],
-      dependencyDashboardApproval: false,
       automerge: false,
     },
     {
-      description: "Python interpreter: Dockerfile, .python-version and ty must agree — manual",
+      description: "Python interpreter: never propose a new minor/major — Dockerfile, .python-version, requires-python and [tool.ty] change together, by hand, after checking dependencies support it (3.15 breaks today: beartype imports typing.no_type_check_decorator)",
       matchPackageNames: ["python"],
-      matchDatasources: ["docker", "python-version"],
-      groupName: "Python runtime",
-      addLabels: ["python"],
-      // A new minor needs `[tool.ty.environment] python-version` and
-      // `requires-python` updated by hand; wait for a dashboard tick.
-      dependencyDashboardApproval: true,
+      matchUpdateTypes: ["major", "minor"],
+      enabled: false,
     },
     {
-      description: "Container base images (Dockerfile, uv)",
+      description: "Container base images (python, uv): one PR for digest/patch refreshes",
       matchManagers: ["dockerfile"],
+      groupName: "Docker base images",
       addLabels: ["docker"],
     },
     {
@@ -114,7 +117,7 @@
       groupName: "WAHA",
       addLabels: ["docker", "waha"],
       automerge: false,
-      // Rolling tags (dev, dev-arm) only produce digest updates; hold them for a tick.
+      // The `dev` tag only ever produces digest updates; hold them for a dashboard tick.
       dependencyDashboardApproval: true,
     },
   ],

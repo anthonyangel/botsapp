@@ -23,6 +23,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0019 — Map WAHA payloads as the NOWEB engine emits them](0019-noweb-aware-waha-mapping.md)
 - [0020 — Renovate (self-hosted, via GitHub Actions) for dependency updates](0020-renovate-dependency-management.md)
 - [0021 — Renovate runs on GITHUB_TOKEN when no RENOVATE_TOKEN exists, and fails loudly](0021-renovate-token-fallback.md) *(supersedes part of 0020)*
+- [0022 — Renovate: fewer, grouped PRs; no Python-minor PRs; fix the WAHA digest pin](0022-renovate-tidy-and-waha-pin-fix.md) *(changes parts of 0020)*
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 
