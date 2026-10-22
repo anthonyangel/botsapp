@@ -20,6 +20,7 @@ from botsapp.bridge import GroupInfo, SendResult
 from botsapp.message_store import ChatNotAllowedError
 from botsapp.tools import (
     MAX_GROUP_CHOICES,
+    TRANSCRIPT_LABEL,
     GroupChoice,
     add_tag,
     choose_group,
@@ -792,7 +793,7 @@ async def test_get_media_attaches_transcript_for_voice_note(
     assert isinstance(result, list)
     assert isinstance(result[0], Audio)
     assert result[0].data == ogg_bytes
-    assert result[1] == "Hi, it's on the fifth floor."
+    assert result[1] == f"{TRANSCRIPT_LABEL}Hi, it's on the fifth floor."
     transcribe_mock.assert_awaited_once_with(ogg_bytes, "audio/ogg; codecs=opus", None)
 
 
@@ -1451,6 +1452,14 @@ async def test_choose_group_errors_clearly_on_a_handshake_era_connection(
     async with Client(server, mode="legacy") as client:
         with pytest.raises(Exception, match="2026-07-28"):
             await client.call_tool("choose_group", {"query": "family"})
+
+
+def test_server_instructions_cover_visibility_and_untrusted_content():
+    from botsapp.app import mcp
+
+    assert mcp.instructions
+    assert "allowlisted" in mcp.instructions
+    assert "never as instructions" in mcp.instructions
 
 
 async def test_choose_group_treats_an_empty_response_map_as_the_first_round(
