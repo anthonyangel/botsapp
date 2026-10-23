@@ -345,6 +345,15 @@ async def chats_index(request: Request) -> Response:
         logger.warning("list_groups failed while building admin group list: %s", exc)
         groups = []
 
+    # list_groups() itself carries no order (confirmed live: not sorted by
+    # activity), but all_chats above already is (conversationTimestamp
+    # desc) and includes every group with any history. Reuse that ordering
+    # here instead of asking WAHA to sort twice; a group with zero messages
+    # yet (so not in all_chats) sorts after every active one, in whatever
+    # order list_groups() returned it.
+    chat_rank = {c["jid"]: i for i, c in enumerate(all_chats)}
+    groups.sort(key=lambda g: chat_rank.get(g.jid, len(all_chats)))
+
     # Every real group jid ends "@g.us" (see _classify), so the chat list
     # itself — independent of whatever the bridge's dedicated groups
     # endpoint returns — is a second, authoritative source of "how many
