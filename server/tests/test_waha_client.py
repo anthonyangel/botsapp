@@ -14,6 +14,7 @@ aiohttp's internal object shapes the way a monkeypatch-based mock would.
 
 import base64
 from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
@@ -1080,3 +1081,74 @@ async def test_search_chats_filters_by_name_or_jid(client, aresponses):
     result = await client.search_chats(query="family")
     assert len(result) == 1
     assert result[0]["name"] == "Family Group"
+
+
+# ── create_session / delete_session (accounts, docs/decisions/0025) ──────────
+
+
+async def test_create_session_posts_a_stopped_session_with_the_noweb_store():
+    client = WAHAClient("http://waha", "key", session="acct-sam")
+    client._get = AsyncMock(side_effect=RuntimeError("→ 404"))  # does not exist yet
+    client._post = AsyncMock()
+    await client.create_session()
+    client._post.assert_awaited_once()
+    path, payload = client._post.call_args.args
+    assert path == "/api/sessions"
+    assert payload["name"] == "acct-sam" and payload["start"] is False
+    assert payload["config"]["noweb"]["store"] == {"enabled": True, "fullSync": True}
+
+
+async def test_create_session_is_idempotent():
+    client = WAHAClient("http://waha", "key", session="acct-sam")
+    client._get = AsyncMock(return_value={"name": "acct-sam", "status": "STOPPED"})
+    client._post = AsyncMock()
+    await client.create_session()
+    client._post.assert_not_awaited()
+
+
+async def test_delete_session_calls_delete_and_tolerates_a_missing_session():
+    client = WAHAClient("http://waha", "key", session="acct-sam")
+    client._request = AsyncMock(side_effect=RuntimeError("WAHA DELETE /api/sessions/x → 404: {}"))
+    await client.delete_session()  # already gone: fine
+    client._request.assert_awaited_once_with("DELETE", "/api/sessions/acct-sam")
+
+
+async def test_delete_session_raises_on_other_errors():
+    client = WAHAClient("http://waha", "key", session="acct-sam")
+    client._request = AsyncMock(side_effect=RuntimeError("WAHA DELETE /api/sessions/x → 500: {}"))
+    with pytest.raises(RuntimeError):
+        await client.delete_session()
+
+
+# ── API keys (admin key; docs/decisions/0027) ────────────────────────────────
+
+
+async def test_key_calls_hit_the_documented_endpoints():
+    client = WAHAClient("http://waha", "admin", session="s")
+    client._post = AsyncMock(return_value={"id": "k"})
+    client._put = AsyncMock(return_value={"id": "k"})
+    client._get = AsyncMock(return_value=[{"id": "k"}])
+    client._request = AsyncMock()
+    assert await client.create_key({"isAdmin": False}) == {"id": "k"}
+    client._post.assert_awaited_once_with("/api/keys", {"isAdmin": False})
+    assert await client.list_keys() == [{"id": "k"}]
+    client._get.assert_awaited_once_with("/api/keys")
+    await client.update_key("k", {"actions": None})
+    client._put.assert_awaited_once_with("/api/keys/k", {"actions": None})
+    await client.delete_key("k")
+    client._request.assert_awaited_once_with("DELETE", "/api/keys/k")
+
+
+async def test_list_keys_accepts_a_wrapped_listing():
+    client = WAHAClient("http://waha", "admin", session="s")
+    client._get = AsyncMock(return_value={"data": [{"id": "k"}]})
+    assert await client.list_keys() == [{"id": "k"}]
+
+
+async def test_delete_key_tolerates_404_only():
+    client = WAHAClient("http://waha", "admin", session="s")
+    client._request = AsyncMock(side_effect=RuntimeError("WAHA DELETE /api/keys/k → 404: {}"))
+    await client.delete_key("k")
+    client._request = AsyncMock(side_effect=RuntimeError("WAHA DELETE /api/keys/k → 500: {}"))
+    with pytest.raises(RuntimeError):
+        await client.delete_key("k")

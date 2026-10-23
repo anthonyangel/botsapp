@@ -8,9 +8,11 @@
 # `workos environment use` in v0.22.0 — re-check with `workos whoami --json`
 # before trusting it implicitly).
 #
-# Usage: workos/apply.sh <staging|production> [base-url]
+# Usage: workos/apply.sh <staging|production> [base-url] [admin-base-url]
 #   base-url defaults to http://localhost:8000 for staging,
 #   and must be passed explicitly for production (your Fly mcp-server URL).
+#   admin-base-url (optional) also registers the admin UI's login redirect
+#   (<admin-base-url>/auth/callback, docs/decisions/0026).
 #
 # NOT covered by this script — neither is a `workos` CLI operation at all
 # (confirmed against `workos --help --json`); both are WorkOS-MCP-server-only
@@ -44,5 +46,8 @@ esac
 
 export WORKOS_MODE=agent
 workos config redirect add "${base_url}/oauth2/callback" --environment-id "$env_id" --json
+if [ -n "${3:-}" ]; then
+  workos config redirect add "${3%/}/auth/callback" --environment-id "$env_id" --json
+fi
 workos config homepage-url set "$base_url" --environment-id "$env_id" --json
 workos authkit redirect-uris list --environment-id "$env_id" --json

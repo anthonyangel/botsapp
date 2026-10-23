@@ -16,6 +16,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import botsapp.admin.app as admin_app
+import botsapp.admin.auth as admin_auth
 import botsapp.state as state
 from botsapp.bridge import ContactInfo, GroupInfo, SessionStatus
 from botsapp.db import DatabaseManager
@@ -41,6 +42,11 @@ def client(monkeypatch):
     monkeypatch.setenv("WAHA_URL", "http://fake")
     monkeypatch.setenv("WAHA_API_KEY", "fake-key")
 
+    dev_config = admin_auth.AdminAuthConfig(
+        client=None, secret=b"", base_url="", dev_user="admin@example.com"
+    )
+    monkeypatch.setattr(admin_auth, "config_from_env", lambda: dev_config)
+
     with TestClient(admin_app.app) as c:
         # Replace the real bridge the lifespan built with a mock, and give
         # the module its own fake unfiltered store — same idea as
@@ -50,18 +56,28 @@ def client(monkeypatch):
         state.bridge.get_contacts.return_value = []
         state.bridge.list_groups.return_value = []
         state.bridge.get_avatar_url.return_value = None
-        state.db.get_chat_metadata = AsyncMock(return_value=None)
-        state.db.set_chat_allowed = AsyncMock()
-        state.db.upsert_chat_metadata = AsyncMock()
-        state.db.list_allowed_emails = AsyncMock(return_value=[])
-        state.db.add_allowed_email = AsyncMock()
-        state.db.remove_allowed_email = AsyncMock()
+        # Sign in as an admin who owns the default account (auth is covered
+        # in test_admin_auth.py); chat_db stands in for the per-viewer handle.
+        state.db.get_user = AsyncMock(return_value={"email": "admin@example.com", "is_admin": True})
+        primary = {"id": "default", "label": "Primary", "owner_email": "admin@example.com"}
+        state.db.list_accounts_for_user = AsyncMock(return_value=[primary])
+        state.db.list_accounts = AsyncMock(return_value=[primary])
+        state.db.get_account = AsyncMock(return_value=primary)
+        state.db.list_grants = AsyncMock(return_value=[])
+
+        async def _bridge(_request):
+            return state.bridge
+
+        monkeypatch.setattr(admin_app, "_bridge", _bridge)
+        chat_db = AsyncMock()
+        chat_db.get_chat_metadata.return_value = None
+        monkeypatch.setattr(admin_app, "_chat_db", lambda _request, _viewer=None: chat_db)
+        c.chat_db = chat_db
         # Module-level, populated fresh by each /chats GET (see its own
         # docstring) — reset between tests so one test's community jid
         # can't leak into the next's redirect-tab lookup.
         admin_app._community_jids.clear()
-        admin_app._raw_store = AsyncMock()
-        admin_app._raw_store.get_chats.return_value = []
+        state.bridge.get_chats.return_value = []
         yield c
 
 
@@ -149,13 +165,13 @@ def test_chats_page_shows_not_connected_state_when_logged_out(client):
 
 
 def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "155@s.whatsapp.net", "name": "155"},
     ]
     state.bridge.get_contacts.return_value = [
         ContactInfo(jid="155@s.whatsapp.net", name="Bob Smith", phone_number="155"),
     ]
-    state.db.get_chat_metadata = AsyncMock(return_value={"is_allowed": True, "tags": ["family"]})
+    client.chat_db.get_chat_metadata.return_value = {"is_allowed": True, "tags": ["family"]}
     r = client.get("/chats")
     assert r.status_code == 200
     assert "Bob Smith" in r.text
@@ -165,7 +181,7 @@ def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
 def test_chats_page_lists_groups_from_live_bridge_list_even_without_history(client):
     # No message history for this group at all — still must appear, since
     # you should be able to allow a group before it's ever posted anything.
-    admin_app._raw_store.get_chats.return_value = []
+    state.bridge.get_chats.return_value = []
     state.bridge.list_groups.return_value = [
         GroupInfo(
             jid="g1@g.us",
@@ -215,7 +231,7 @@ def test_chats_page_shows_groups_loaded_gap(client):
     # know about far more group *chats* (every real group jid ends
     # "@g.us") than it has full group metadata for. Surface the gap
     # instead of silently under-showing.
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "g1@g.us", "name": "g1"},
         {"jid": "g2@g.us", "name": "g2"},  # no metadata from list_groups()
     ]
@@ -227,7 +243,7 @@ def test_chats_page_shows_groups_loaded_gap(client):
 
 
 def test_chats_page_hides_groups_loaded_note_once_caught_up(client):
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "g1@g.us", "name": "g1"},
     ]
     state.bridge.list_groups.return_value = [
@@ -247,7 +263,7 @@ def test_chats_page_hides_status_tab_when_never_seen(client):
 
 
 def test_chats_page_shows_status_tab_when_seen(client):
-    admin_app._raw_store.get_chats.return_value = [{"jid": "status@broadcast", "name": ""}]
+    state.bridge.get_chats.return_value = [{"jid": "status@broadcast", "name": ""}]
     r = client.get("/chats")
     assert "Status/Stories" in r.text
     assert ">Status<" in r.text
@@ -256,7 +272,7 @@ def test_chats_page_shows_status_tab_when_seen(client):
 def test_chats_page_separates_newsletters_into_their_own_tab(client):
     # @newsletter (WhatsApp Channels) jids must not be lumped into the
     # direct-chats tab — they get their own, alongside Chats/Groups.
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "123@newsletter", "name": "Tech News"},
         {"jid": "155@s.whatsapp.net", "name": "155"},
     ]
@@ -268,7 +284,7 @@ def test_chats_page_separates_newsletters_into_their_own_tab(client):
 
 
 def test_chats_page_shows_country_flag_for_direct_chat(client):
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "972501234567@s.whatsapp.net", "name": "972501234567"},
     ]
     r = client.get("/chats")
@@ -278,7 +294,7 @@ def test_chats_page_shows_country_flag_for_direct_chat(client):
 
 def test_chats_page_omits_country_flag_for_unresolvable_jid(client):
     # An @lid contact never resolved to a phone jid — no crash, just no flag.
-    admin_app._raw_store.get_chats.return_value = [
+    state.bridge.get_chats.return_value = [
         {"jid": "12345@lid", "name": "Mystery"},
     ]
     r = client.get("/chats")
@@ -305,7 +321,7 @@ def test_toggle_allowed_on(client):
     # belongs to (a group here) — not always Chats, or ticking a checkbox
     # on the Groups tab flips the page back to Chats underneath the user.
     assert r.headers["location"] == "/chats#groups-panel"
-    state.db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=True)
+    client.chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=True)
 
 
 def test_toggle_allowed_redirects_to_chats_tab_for_direct_chat(client):
@@ -337,7 +353,7 @@ def test_toggle_allowed_redirects_to_status_tab(client):
 def test_toggle_allowed_off_when_unchecked(client):
     # An unchecked checkbox simply isn't submitted — no "is_allowed" key at all.
     client.post("/chats/g1@g.us/allow", data={}, follow_redirects=False)
-    state.db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=False)
+    client.chat_db.set_chat_allowed.assert_awaited_once_with(jid="g1@g.us", is_allowed=False)
 
 
 def test_save_metadata_parses_comma_separated_tags(client):
@@ -348,44 +364,11 @@ def test_save_metadata_parses_comma_separated_tags(client):
     )
     assert r.status_code == 303
     assert r.headers["location"] == "/chats#groups-panel"
-    state.db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=["family", "core"])
+    client.chat_db.upsert_chat_metadata.assert_awaited_once_with(
+        jid="g1@g.us", tags=["family", "core"]
+    )
 
 
 def test_save_metadata_empty_tags(client):
     client.post("/chats/g1@g.us/metadata", data={"tags": ""}, follow_redirects=False)
-    state.db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])
-
-
-# ── /access — email allowlist (docs/decisions/0015-email-allowlist-in-db.md) ─
-
-
-def test_access_page_lists_allowed_emails(client):
-    state.db.list_allowed_emails.return_value = ["anthony@angelfamily.net"]
-    r = client.get("/access")
-    assert r.status_code == 200
-    assert "anthony@angelfamily.net" in r.text
-
-
-def test_access_page_shows_empty_state(client):
-    r = client.get("/access")
-    assert r.status_code == 200
-    assert "No emails allowed yet" in r.text
-
-
-def test_add_allowed_email(client):
-    r = client.post("/access/add", data={"email": "mom@example.com"}, follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/access"
-    state.db.add_allowed_email.assert_awaited_once_with("mom@example.com")
-
-
-def test_add_allowed_email_blank_is_a_noop(client):
-    client.post("/access/add", data={"email": "  "}, follow_redirects=False)
-    state.db.add_allowed_email.assert_not_awaited()
-
-
-def test_remove_allowed_email(client):
-    r = client.post("/access/mom@example.com/remove", follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/access"
-    state.db.remove_allowed_email.assert_awaited_once_with("mom@example.com")
+    client.chat_db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])

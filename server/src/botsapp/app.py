@@ -18,9 +18,15 @@ from fastmcp.server.middleware import AuthMiddleware
 from mcp.types import Icon
 
 import botsapp.state as state
-from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store
+from botsapp.bridge_factory import (
+    bridge_provider_name,
+    build_bridge_and_store,
+    build_registry,
+    scoped_keys_required,
+)
 from botsapp.db import DatabaseManager
-from botsapp.message_store import AllowlistedMessageStore
+from botsapp.secretbox import SecretBox
+from botsapp.tool_scopes import WahaScopeMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -89,21 +95,44 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
     state.db = DatabaseManager(os.environ["DATABASE_URL"])  # a SQLite file path
     await state.db.connect()
     await state.db.ensure_schema()
+    if admin_email := os.environ.get("BOTSAPP_ADMIN_EMAIL", "").strip():
+        # Adopts the single-tenant data as the first admin's primary account
+        # (idempotent) — docs/decisions/0025.
+        await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
+    if not await state.db.list_accounts():
+        logger.error(
+            "No WhatsApp accounts exist, so no tool will return anything. Set "
+            "BOTSAPP_ADMIN_EMAIL to the owner's email (docs/decisions/0025)."
+        )
 
-    # The admin UI talks to the raw store directly — it needs to see
-    # not-yet-allowed chats in order to allow them. Every other consumer
-    # goes through the allowlist wrapper.
-    bridge, raw_store = build_bridge_and_store()
-    state.bridge = bridge
-    state.message_store = AllowlistedMessageStore(raw_store, state.db)
+    box = SecretBox.from_env()  # raises if BOTSAPP_SECRET_KEY is malformed
+    if scoped_keys_required() and box is None:
+        raise RuntimeError(
+            "WAHA_REQUIRE_SCOPED_KEYS needs BOTSAPP_SECRET_KEY to open the stored keys"
+        )
+
+    # state.bridge is the default-session bridge on the admin key, used only by
+    # the permanently blocked outbound tools. It is skipped when the admin key
+    # has been withheld from this process (strict mode); everything reachable
+    # resolves a per-account, per-viewer view through state.registry (scope.py),
+    # on that account's own scoped key.
+    if os.environ.get("WAHA_API_KEY"):
+        bridge, _ = build_bridge_and_store()
+        state.bridge = bridge
+    state.registry = build_registry(state.db, box)
+    unkeyed = [a["id"] for a in await state.db.list_accounts() if not a["waha_key_id"]]
+    if unkeyed:
+        logger.warning("accounts without a scoped WAHA key: %s", ", ".join(unkeyed))
     logger.info("Bridge ready (%s)", bridge_provider_name())
 
     yield
 
-    await state.bridge.close()
+    if state.bridge is not None:
+        await state.bridge.close()
+    await state.registry.close()
     await state.db.close()
     state.db = None
-    state.message_store = None
+    state.registry = None
     state.bridge = None
     logger.info("Shutdown complete")
 
@@ -153,5 +182,5 @@ mcp = FastMCP(
     lifespan=lifespan,
     icons=[_WHATSAPP_ICON],
     auth=_build_auth(),
-    middleware=[AuthMiddleware(auth=_build_auth_checks())],
+    middleware=[AuthMiddleware(auth=_build_auth_checks()), WahaScopeMiddleware()],
 )

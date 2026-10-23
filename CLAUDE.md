@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0024.
+been kept in date order, current through 0027.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -34,7 +34,7 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
 |---|---|---|
 | `waha` | WhatsApp bridge, NOWEB engine (`devlikeapro/waha:noweb-<version>` on Fly, `noweb-arm-<version>` locally — version-pinned, never `dev`; see [0023](docs/decisions/0023-waha-noweb-version-pinned-images.md)) | private only, always |
 | `mcp-server` | The MCP endpoint (`botsapp.main:app`, port 8000) — the *only* thing meant to be public | public, gated by WorkOS AuthKit login |
-| `admin-ui` | QR login + chat allowlist/tags (`botsapp.admin_main:app`, port 8100) — same image as `mcp-server`, different `command:` | private only, always — **no login of its own** |
+| `admin-ui` | QR login + chat allowlist/tags (`botsapp.admin_main:app`, port 8100) — same image as `mcp-server`, different `command:` | private until the AuthKit login ([0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md), `admin/auth.py`) is verified against live WorkOS; then reachable behind that login. Needs login settings or an explicit `ADMIN_DISABLE_AUTH` |
 
 - `mcp-server` and `admin-ui` share one SQLite file (`chat_metadata.db`, WAL
   mode) for tags/allowlist — see [0007](docs/decisions/0007-sqlite-for-metadata-store.md).
@@ -44,12 +44,27 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   Machines) can't share it. See [0013](docs/decisions/0013-single-fly-app-shared-volume.md).
 - Nothing is visible to the MCP server until explicitly allowlisted in the
   admin UI — see [0004](docs/decisions/0004-chat-allowlist-and-admin-ui.md).
+- Multi-tenancy is in progress ([0025](docs/decisions/0025-multi-tenancy-users-accounts-grants.md)):
+  users/accounts/grants/per-viewer `chat_access` are live; MCP tools resolve a
+  per-caller scope (`server/src/botsapp/scope.py`). The admin UI has the AuthKit
+  login decided in
+  [0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md)
+  (built and tested against a stubbed WorkOS client; not yet verified live;
+  one WorkOS org, role in WorkOS, grants and chat visibility in the DB). Its
+  Session and Chats pages act on the account selected in the header (a validated
+  cookie); the Accounts and Users pages manage accounts, sharing and people.
+  Needs `BOTSAPP_ADMIN_EMAIL`. Each account's MCP access can use its own read-only
+  WAHA session key, stored encrypted ([0027](docs/decisions/0027-scoped-waha-session-keys.md);
+  needs `BOTSAPP_SECRET_KEY`; `WAHA_REQUIRE_SCOPED_KEYS` makes it mandatory); MCP tools carry WAHA action names as
+  tags and are only shown when a key allows them. Open follow-ups (live WAHA/WorkOS verification, pending-invitation display,
+  tool-list change notifications, the setup runbook, cleanup) are GitHub issues,
+  summarised under "Where things stand" in 0025.
 - Every WhatsApp-mutating tool is tagged `"outbound"` and permanently blocked
   server-side via `restrict_tag` (a scope no real auth token will ever carry)
   — this server is read-only by construction, not by convention. See
   `server/CLAUDE.md` and [0001](docs/decisions/0001-keep-custom-fastmcp-server.md)/[0003](docs/decisions/0003-google-oauth-authn-authz.md).
 - Auth is WorkOS AuthKit + an email allowlist stored in the shared SQLite DB
-  and managed from the admin UI's Access tab (not an env var — see
+  and managed from the admin UI's Users page (not an env var — see
   [0015](docs/decisions/0015-email-allowlist-in-db.md)), no Google/Cloudflare
   in the stack — see [0005](docs/decisions/0005-authkit-oauth-provider.md), [0010](docs/decisions/0010-drop-cloudflare-two-provider-deploy.md), [0011](docs/decisions/0011-jwt-template-drops-workostokenverifier.md), [0012](docs/decisions/0012-authkitprovider-issuer-trailing-slash-bug.md) (open bug).
 - Deploy target is Fly.io, plain `fly launch`/`fly deploy` against `server/Dockerfile`

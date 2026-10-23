@@ -22,6 +22,7 @@ import botsapp.state as state  # noqa: E402
 from botsapp.bridge import Bridge  # noqa: E402
 from botsapp.db import DatabaseManager  # noqa: E402
 from botsapp.message_store import MessageStore  # noqa: E402
+from botsapp.scope import Scope  # noqa: E402
 
 
 @pytest.fixture
@@ -62,16 +63,35 @@ _ALLOW_ALL = _AllowAll()
 
 
 @pytest.fixture(autouse=True)
-def _patch_state(mock_db: AsyncMock, mock_message_store: AsyncMock, mock_bridge: AsyncMock):
+def _patch_state(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_db: AsyncMock,
+    mock_message_store: AsyncMock,
+    mock_bridge: AsyncMock,
+):
     """
     Inject mock singletons into the state module before every test and tear
     them down afterwards. autouse=True means every test gets a clean state
     without having to import or reference this fixture explicitly.
+
+    Tools resolve a per-request Scope (scope.py); here every tool call gets
+    one wrapping the same mocks, so tool tests stay about the tool. The real
+    resolution is covered in test_scope.py, which undoes this patch.
     """
     state.db = mock_db
-    state.message_store = mock_message_store
     state.bridge = mock_bridge
+
+    async def _fake_resolve_scope(account: str | None = None) -> Scope:
+        return Scope(
+            account_id=account or "default",
+            viewer="test@example.com",
+            db=mock_db,  # ty: ignore[invalid-argument-type]
+            store=mock_message_store,
+            bridge=mock_bridge,
+        )
+
+    monkeypatch.setattr("botsapp.tools.resolve_scope", _fake_resolve_scope)
     yield
     state.db = None
-    state.message_store = None
     state.bridge = None
+    state.registry = None

@@ -11,7 +11,10 @@ html.escape before landing in markup.
 
 import html
 import json
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 _MDL_VERSION = "1.3.0"
 _MDL_CSS = (
@@ -99,6 +102,130 @@ _EXTRA_CSS = """
 """
 
 
+@dataclass(frozen=True)
+class NavContext:
+    """Who is looking and which account they're acting on, set per request by
+    admin/auth.py's middleware so every page's header can reflect it without
+    each page function growing parameters. The default shows everything."""
+
+    email: str = ""
+    is_admin: bool = True
+    accounts: tuple[tuple[str, str], ...] = ()  # (id, label) the user can select
+    account: str = ""
+    can_manage_session: bool = True  # owner of the selected account, or an admin
+
+
+@dataclass(frozen=True)
+class ChatView:
+    """How the Chats page is being used, set by its handler for the render.
+
+    ``for_viewer`` is empty when you are editing your own view; set to a
+    granted viewer's email when the account's owner is choosing what *that*
+    person can see (then the URLs carry ``?viewer=``). ``can_toggle`` is the
+    "Visible to MCP" switch, which only the account's owner has; ``can_tag`` is
+    editing your own tags."""
+
+    can_toggle: bool = True
+    can_tag: bool = True
+    for_viewer: str = ""
+    me: str = ""
+    owner: str = ""
+    viewers: tuple[str, ...] = ()  # the owner's choices: themself first, then grants
+
+
+_DEFAULT_CHAT_VIEW = ChatView()  # frozen, so safe as a shared default
+chat_view: ContextVar[ChatView] = ContextVar("admin_chat_view", default=_DEFAULT_CHAT_VIEW)
+
+
+def _chat_url(jid: str, op: str) -> str:
+    base = f"/chats/{html.escape(jid, quote=True)}/{op}"
+    viewer = chat_view.get().for_viewer
+    return f"{base}?viewer={html.escape(quote(viewer, safe='@'), quote=True)}" if viewer else base
+
+
+def _chat_header() -> str:
+    view = chat_view.get()
+    if view.viewers and len(view.viewers) > 1:
+        options = "".join(
+            f'<option value="{html.escape(v, quote=True)}"'
+            f"{' selected' if v == (view.for_viewer or view.me) else ''}>"
+            f"{html.escape(v)}{' (you)' if v == view.me else ''}</option>"
+            for v in view.viewers
+        )
+        who = view.for_viewer or view.me
+        note = (
+            "You are choosing what <b>" + html.escape(who) + "</b> can see on this account."
+            if view.for_viewer
+            else "These are the chats <b>you</b> can see. Pick someone to choose what they see."
+        )
+        return f"""
+    <p class="tab-note">
+      <label>Showing visibility for
+        <select aria-label="Viewer"
+                onchange="location.href='/chats?viewer='+encodeURIComponent(this.value)">
+          {options}</select></label><br>{note}
+    </p>"""
+    if not view.can_toggle:
+        return (
+            '<p class="tab-note">These are the chats '
+            f"<b>{html.escape(view.owner)}</b> has shared with you. You can label them for "
+            "yourself; only they can change what is shared.</p>"
+        )
+    return ""
+
+
+_DEFAULT_NAV = NavContext()  # frozen, so safe as a shared default
+nav: ContextVar[NavContext] = ContextVar("admin_nav", default=_DEFAULT_NAV)
+
+
+def _select_account_form(account_id: str, *, label: str, next_url: str | None = None) -> str:
+    """A POST form that selects `account_id`, styled to look like a plain link.
+
+    `/accounts/<id>/select` mutates the botsapp_account cookie, so it must be a
+    POST (AuthMiddleware's CSRF/Origin check only applies to non-GET/HEAD/OPTIONS
+    requests) rather than an `<a href>`/`location.href` navigation.
+    """
+    aid = html.escape(quote(account_id, safe=""), quote=True)
+    action = f"/accounts/{aid}/select"
+    if next_url:
+        action += f"?next={html.escape(quote(next_url, safe=''), quote=True)}"
+    return (
+        f'<form method="post" action="{action}" style="display:inline;">'
+        '<button type="submit" style="background:none;border:none;padding:0;'
+        'color:#1a73e8;text-decoration:underline;cursor:pointer;font:inherit;">'
+        f"{html.escape(label)}</button></form>"
+    )
+
+
+def _nav_html() -> str:
+    ctx = nav.get()
+    links = []
+    if ctx.can_manage_session:
+        links.append('<a class="mdl-navigation__link" href="/">Session</a>')
+    links += [
+        '<a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>',
+        '<a class="mdl-navigation__link" href="/accounts">Accounts</a>',
+    ]
+    if ctx.is_admin:
+        links.append('<a class="mdl-navigation__link" href="/users">Users</a>')
+    links.append('<a class="mdl-navigation__link" href="/logout">Sign out</a>')
+    switcher = ""
+    if len(ctx.accounts) > 1:
+        options = "".join(
+            f'<option value="{html.escape(i, quote=True)}"'
+            f"{' selected' if i == ctx.account else ''}>{html.escape(label)}</option>"
+            for i, label in ctx.accounts
+        )
+        switcher = (
+            '<form method="post" style="display:inline-block;margin-right:16px;">'
+            '<select aria-label="Account" '
+            "onchange=\"this.form.action='/accounts/'+encodeURIComponent(this.value)"
+            "+'/select'; this.form.submit();\">"
+            f"{options}</select></form>"
+        )
+    return switcher + "".join(links)
+
+
 def _page(title: str, body: str, bridge_name: str = "") -> str:
     bridge_badge = (
         f'<span class="badge bridge-badge">{html.escape(bridge_name.upper())}</span>'
@@ -122,11 +249,7 @@ def _page(title: str, body: str, bridge_name: str = "") -> str:
       <div class="mdl-layout__header-row">
         <span class="mdl-layout-title">WhatsApp Admin {bridge_badge}</span>
         <div class="mdl-layout-spacer"></div>
-        <nav class="mdl-navigation">
-          <a class="mdl-navigation__link" href="/">Session</a>
-          <a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>
-          <a class="mdl-navigation__link" href="/access">Access</a>
-        </nav>
+        <nav class="mdl-navigation">{_nav_html()}</nav>
       </div>
     </header>
     <main class="mdl-layout__content">
@@ -139,6 +262,15 @@ def _page(title: str, body: str, bridge_name: str = "") -> str:
   <script src="{_MDL_JS}"></script>
 </body>
 </html>"""
+
+
+def message_page(title: str, message_html: str) -> str:
+    """A bare notice page (login errors, signed-out). ``message_html`` is
+    trusted markup from admin/auth.py; interpolate user data only via
+    html.escape before passing it in."""
+    return _page(
+        title, f'<div class="mdl-card mdl-shadow--2dp" style="padding:16px">{message_html}</div>'
+    )
 
 
 def _avatar(url: str | None, alt: str) -> str:
@@ -296,7 +428,8 @@ def not_connected_page(bridge_name: str = "") -> str:
 
 
 def _allow_toggle(jid: str, is_allowed: bool) -> str:
-    jid_attr = html.escape(jid, quote=True)
+    if not chat_view.get().can_toggle:
+        return '<span class="badge">Shared with you</span>'
     checkbox_id = f"allow-{abs(hash(jid))}"
     checked = "checked" if is_allowed else ""
     # onchange calls saveInBackground (see the page script) rather than
@@ -308,7 +441,7 @@ def _allow_toggle(jid: str, is_allowed: bool) -> str:
     # checkbox already shows its own new state the instant it's clicked,
     # natively, so there's nothing left to update once the save is fired.
     return f"""
-    <form class="allow-form" method="post" action="/chats/{jid_attr}/allow">
+    <form class="allow-form" method="post" action="{_chat_url(jid, "allow")}">
       <label class="mdl-checkbox mdl-js-checkbox mdl-js-ripple-effect" for="{checkbox_id}">
         <input type="checkbox" id="{checkbox_id}" class="mdl-checkbox__input"
                name="is_allowed" {checked} onchange="saveInBackground(this.form)">
@@ -364,13 +497,16 @@ def _metadata_form(jid: str, tags: list[str]) -> str:
     already use. No submit button: one would only ever do what Enter
     already does, and every other control on this form is button-free for
     the same reason."""
-    jid_attr = html.escape(jid, quote=True)
     field_id = abs(hash(jid))
     field_id_js = html.escape(str(field_id), quote=True)
     tags_str = ", ".join(tags)
+    if not chat_view.get().can_tag:
+        # Tags are each person's own labels; the owner choosing what someone
+        # else sees doesn't edit theirs.
+        return _tag_chips(tags, field_id)
     return f"""
     {_tag_chips(tags, field_id)}
-    <form class="meta-form" method="post" action="/chats/{jid_attr}/metadata">
+    <form class="meta-form" method="post" action="{_chat_url(jid, "metadata")}">
       <input type="hidden" id="tags-{field_id}" name="tags"
              value="{html.escape(tags_str, quote=True)}">
       <div class="mdl-textfield mdl-js-textfield">
@@ -644,6 +780,7 @@ def browse_page(
       </div>"""
 
     body = f"""
+    {_chat_header()}
     <p class="tab-note">
       Toggling "Visible to MCP" is the actual privacy boundary — Claude cannot see a
       chat, its messages, or its metadata until it's checked here.
@@ -965,56 +1102,235 @@ def browse_page(
     return _page("Chats & Groups", body, bridge_name)
 
 
-def _allowed_email_row(email: str) -> str:
-    email_attr = html.escape(email, quote=True)
-    return f"""
-    <tr>
-      <td>{html.escape(email)}</td>
+def _role_select(role: str) -> str:
+    options = "".join(
+        f'<option value="{r}"{" selected" if r == role else ""}>{r}</option>'
+        for r in ("admin", "member")
+    )
+    return f'<select name="role" onchange="this.form.submit()">{options}</select>'
+
+
+def _user_row(user: dict[str, Any], current: str) -> str:
+    email = user["email"]
+    href = html.escape(quote(email, safe="@"), quote=True)
+    label = html.escape(email)
+    you = ' <span class="badge">you</span>' if email == current else ""
+    role = "admin" if user["is_admin"] else "member"
+    if email == current:
+        controls = "<td>" + html.escape(role) + "</td><td></td>"
+    else:
+        controls = f"""
       <td>
-        <form method="post" action="/access/{email_attr}/remove"
-              onsubmit="return confirm('Remove {email_attr} from the allowlist?');">
+        <form method="post" action="/users/{href}/role">{_role_select(role)}</form>
+      </td>
+      <td>
+        <form method="post" action="/users/{href}/remove"
+              onsubmit="return confirm('Remove this user? They lose all access.');">
           <button class="mdl-button mdl-js-button mdl-button--icon" type="submit" title="Remove">
             <i class="material-icons">delete</i>
           </button>
         </form>
-      </td>
-    </tr>"""
+      </td>"""
+    return f"<tr><td>{label}{you}</td>{controls}</tr>"
 
 
-def access_page(emails: list[str], bridge_name: str = "") -> str:
-    """Who may authenticate to the MCP server at all — see
-    docs/decisions/0015-email-allowlist-in-db.md. Distinct from the chat
-    allowlist on /chats, which gates what an already-authenticated caller
-    can see, not who can log in."""
+def users_page(
+    users: list[dict[str, Any]],
+    current: str,
+    managed: bool,
+    notice: str = "",
+    error: str = "",
+    bridge_name: str = "",
+) -> str:
+    """Who is a botsapp user and their role. With ``managed`` set, invitations,
+    removals and role changes also go to WorkOS (docs/decisions/0026)."""
+    flash = ""
+    if notice:
+        flash += f'<p class="tab-note" role="status">{html.escape(notice)}</p>'
+    if error:
+        flash += f'<p class="tab-note" role="alert" style="color:#b00020">{html.escape(error)}</p>'
+    if not managed:
+        flash += (
+            '<p class="tab-note">WorkOS is not connected: changes here only affect this '
+            "server's own list, and no invitation email is sent.</p>"
+        )
     rows = (
-        "".join(_allowed_email_row(e) for e in emails)
-        if emails
-        else '<tr><td colspan="2" class="empty-state">No emails allowed yet — '
-        "nobody can use the MCP server until you add one.</td></tr>"
+        "".join(_user_row(u, current) for u in users)
+        if users
+        else '<tr><td colspan="3" class="empty-state">No users yet.</td></tr>'
     )
     body = f"""
+    {flash}
     <p class="tab-note">
-      Only these emails may authenticate to the MCP server — this is who can
-      log in at all, separate from which chats a logged-in caller can see
-      (that's the Chats &amp; Groups tab). An AuthKit login from an email not
-      listed here is rejected after sign-in.
+      Only these people can use botsapp. <b>admin</b> can manage users; <b>member</b>
+      can use the accounts they own or were granted. Which chats someone sees is
+      set per account, not here.
     </p>
-    <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:480px;padding:24px;">
-      <form method="post" action="/access/add" style="display:flex;gap:12px;align-items:flex-end;">
+    <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:560px;padding:24px;">
+      <form method="post" action="/users/invite"
+            style="display:flex;gap:12px;align-items:flex-end;">
         <div class="mdl-textfield mdl-js-textfield" style="flex:1;">
           <input class="mdl-textfield__input" type="email" name="email" id="new-email" required>
-          <label class="mdl-textfield__label" for="new-email">Email to allow…</label>
+          <label class="mdl-textfield__label" for="new-email">Email to invite…</label>
         </div>
+        <select name="role">
+          <option value="member">member</option>
+          <option value="admin">admin</option>
+        </select>
         <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
                 type="submit">
-          Add
+          Invite
         </button>
       </form>
     </div>
     <div class="table-scroll">
-      <table class="mdl-data-table mdl-js-data-table" style="width:100%;max-width:480px;">
-        <thead><tr><th>Email</th><th></th></tr></thead>
+      <table class="mdl-data-table mdl-js-data-table" style="width:100%;max-width:560px;">
+        <thead><tr><th>Email</th><th>Role</th><th></th></tr></thead>
         <tbody>{rows}</tbody>
       </table>
     </div>"""
-    return _page("Access", body, bridge_name)
+    return _page("Users", body, bridge_name)
+
+
+_CARD_STYLE = "width:100%;max-width:560px;padding:16px 24px;margin-bottom:16px;"
+
+
+def _grant_row(account_id: str, email: str) -> str:
+    aid = html.escape(quote(account_id, safe=""), quote=True)
+    choose_chats = _select_account_form(
+        account_id, label="Choose chats", next_url=f"/chats?viewer={quote(email, safe='@')}"
+    )
+    return f"""
+      <li style="display:flex;align-items:center;gap:8px;">
+        <span>{html.escape(email)}</span>
+        {choose_chats}
+        <form method="post" action="/accounts/{aid}/revoke"
+              onsubmit="return confirm('Revoke access? They stop seeing this account at once.');">
+          <input type="hidden" name="email" value="{html.escape(email, quote=True)}">
+          <button class="mdl-button mdl-js-button mdl-button--icon" type="submit" title="Revoke">
+            <i class="material-icons">close</i>
+          </button>
+        </form>
+      </li>"""
+
+
+def _account_card(row: dict[str, Any], current: str) -> str:
+    aid = html.escape(quote(row["id"], safe=""), quote=True)
+    label = html.escape(row["label"])
+    badge = ' <span class="badge">selected</span>' if row["id"] == current else ""
+    grants = "".join(_grant_row(row["id"], e) for e in row["granted"])
+    grants = (
+        f'<ul style="list-style:none;padding:0;margin:8px 0;">{grants}</ul>'
+        if grants
+        else ('<p class="tab-note">Not shared with anyone.</p>')
+    )
+    options = "".join(
+        f'<option value="{html.escape(u, quote=True)}">{html.escape(u)}</option>'
+        for u in row["grantable"]
+    )
+    grant_form = (
+        f"""
+      <form method="post" action="/accounts/{aid}/grant" style="display:flex;gap:8px;">
+        <select name="email" required>{options}</select>
+        <button class="mdl-button mdl-js-button mdl-button--raised" type="submit">Share</button>
+      </form>"""
+        if options
+        else ""
+    )
+    key_block = ""
+    if row.get("manage_key"):
+        if row.get("key_id"):
+            state_text = (
+                "read-only, as intended"
+                if not row.get("key_drift")
+                else "<b>differs from intended</b>: " + html.escape(row["key_drift"])
+            )
+            buttons = f"""
+        <form method="post" action="/accounts/{aid}/key/verify" style="display:inline;">
+          <button class="mdl-button mdl-js-button" type="submit">Verify</button></form>
+        <form method="post" action="/accounts/{aid}/key/rotate" style="display:inline;"
+              onsubmit="return confirm('Replace this account\'s access key?');">
+          <button class="mdl-button mdl-js-button" type="submit">Rotate</button></form>"""
+        elif row.get("can_store_key"):
+            state_text = "none: the MCP server is using the shared admin key for this account"
+            buttons = f"""
+        <form method="post" action="/accounts/{aid}/key/create" style="display:inline;">
+          <button class="mdl-button mdl-js-button mdl-button--raised" type="submit">
+            Create access key</button></form>"""
+        else:
+            state_text = "none, and BOTSAPP_SECRET_KEY isn't set so one can't be stored"
+            buttons = ""
+        key_block = f"""
+      <p class="tab-note">WAHA access key: {state_text}</p>{buttons}"""
+    delete = (
+        f"""
+      <form method="post" action="/accounts/{aid}/delete" style="margin-top:12px;"
+            onsubmit="return confirm('Delete this account and its WhatsApp session?');">
+        <button class="mdl-button mdl-js-button" type="submit">Delete account</button>
+      </form>"""
+        if row["deletable"]
+        else ""
+    )
+    return f"""
+    <div class="mdl-card mdl-shadow--2dp" style="{_CARD_STYLE}">
+      <h5 style="margin:0;">{label}{badge}</h5>
+      <p class="tab-note">id <code>{html.escape(row["id"])}</code> · owner
+        {html.escape(row["owner"])} · WhatsApp: <b>{html.escape(row["status"])}</b></p>
+      <p>{_select_account_form(row["id"], label="Use this account")}</p>
+      {key_block}
+      <b>Shared with</b>
+      {grants}
+      {grant_form}
+      {delete}
+    </div>"""
+
+
+def accounts_page(
+    rows: list[dict[str, Any]],
+    shared: list[tuple[str, str, str]],
+    users: list[str],
+    is_admin: bool,
+    current: str,
+    notice: str = "",
+    error: str = "",
+    bridge_name: str = "",
+) -> str:
+    """WhatsApp accounts you own (all of them, for an admin), who they are shared
+    with, and which one the Session and Chats pages act on."""
+    flash = ""
+    if notice:
+        flash += f'<p class="tab-note" role="status">{html.escape(notice)}</p>'
+    if error:
+        flash += f'<p class="tab-note" role="alert" style="color:#b00020">{html.escape(error)}</p>'
+    create = ""
+    if is_admin:
+        owners = "".join(
+            f'<option value="{html.escape(u, quote=True)}">{html.escape(u)}</option>' for u in users
+        )
+        create = f"""
+    <div class="mdl-card mdl-shadow--2dp" style="{_CARD_STYLE}">
+      <b>New account</b>
+      <form method="post" action="/accounts/create"
+            style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+        <input class="mdl-textfield__input" style="width:140px" name="id"
+               placeholder="id, e.g. sam" required>
+        <input class="mdl-textfield__input" style="width:160px" name="label" placeholder="label">
+        <select name="owner" required>{owners}</select>
+        <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
+                type="submit">Create</button>
+      </form>
+      <p class="tab-note">Creates the account and an empty WhatsApp session. The owner then
+        selects it and pairs it from the Session page.</p>
+    </div>"""
+    cards = "".join(_account_card(r, current) for r in rows) or (
+        "<p class='tab-note'>You don't own any account yet.</p>"
+    )
+    shared_list = ""
+    if shared:
+        items = "".join(
+            f"<li>{_select_account_form(i, label=label)} — shared by {html.escape(owner)}</li>"
+            for i, label, owner in shared
+        )
+        shared_list = f"<h5>Shared with you</h5><ul>{items}</ul>"
+    body = f"{flash}{create}{cards}{shared_list}"
+    return _page("Accounts", body, bridge_name)

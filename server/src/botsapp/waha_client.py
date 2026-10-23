@@ -289,6 +289,63 @@ class WAHAClient:
                 logger.debug("Could not fetch QR for %s: %s", self._session_name, exc)
         return status
 
+    def _new_session_payload(self, *, start: bool) -> dict[str, Any]:
+        return {
+            "name": self._session_name,
+            "start": start,
+            # Required for the NOWEB engine (see waha/fly.toml's
+            # WHATSAPP_DEFAULT_ENGINE note): WAHA's chat/message-history
+            # endpoints 400 with "Enable NOWEB store" unless the store was
+            # turned on at session-creation time — it can't be toggled after
+            # pairing without losing history, so it has to be set here, not
+            # patched in later. fullSync=True trades a longer initial sync for
+            # ~1yr/100k-msg history instead of NOWEB's ~3-month default;
+            # harmless no-op under WEBJS, which ignores config.noweb entirely.
+            "config": {"noweb": {"store": {"enabled": True, "fullSync": True}}},
+        }
+
+    async def create_session(self) -> None:
+        """Create this session without starting it (no QR yet); idempotent.
+
+        Used when an account is created (docs/decisions/0025): the owner pairs
+        later through the normal connect flow, which restarts a STOPPED session.
+        """
+        try:
+            await self._get(f"/api/sessions/{self._session_name}")
+            return  # already exists
+        except Exception:
+            pass
+        await self._post("/api/sessions", self._new_session_payload(start=False))
+
+    # ── API keys (admin key only; docs/decisions/0027) ───────────────────
+
+    async def create_key(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._post("/api/keys", body)
+
+    async def list_keys(self) -> list[dict[str, Any]]:
+        data = await self._get("/api/keys")
+        return data if isinstance(data, list) else data.get("data", [])
+
+    async def update_key(self, key_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._put(f"/api/keys/{key_id}", body)
+
+    async def delete_key(self, key_id: str) -> None:
+        """Delete a key; one that is already gone is not an error."""
+        try:
+            await self._request("DELETE", f"/api/keys/{key_id}")
+        except RuntimeError as exc:
+            if "→ 404" not in str(exc):
+                raise
+
+    async def delete_session(self) -> None:
+        """Delete this session and its persisted auth material; a session that
+        is already gone is not an error."""
+        try:
+            await self._request("DELETE", f"/api/sessions/{self._session_name}")
+        except RuntimeError as exc:
+            if "→ 404" not in str(exc):
+                raise
+
     async def connect(self) -> SessionStatus:
         # Idempotent: create-and-start if the session doesn't exist yet,
         # otherwise just (re)start it. WAHA errors on POST /api/sessions
@@ -300,24 +357,7 @@ class WAHAClient:
 
         try:
             if existing is None:
-                await self._post(
-                    "/api/sessions",
-                    {
-                        "name": self._session_name,
-                        "start": True,
-                        # Required for the NOWEB engine (see waha/fly.toml's
-                        # WHATSAPP_DEFAULT_ENGINE note): WAHA's chat/message-
-                        # history endpoints 400 with "Enable NOWEB store"
-                        # unless the store was turned on at session-creation
-                        # time — it can't be toggled after pairing without
-                        # losing history, so it has to be set here, not
-                        # patched in later. fullSync=True trades a longer
-                        # initial sync for ~1yr/100k-msg history instead of
-                        # NOWEB's ~3-month default; harmless no-op under
-                        # WEBJS, which ignores config.noweb entirely.
-                        "config": {"noweb": {"store": {"enabled": True, "fullSync": True}}},
-                    },
-                )
+                await self._post("/api/sessions", self._new_session_payload(start=True))
             elif existing.get("status") in ("STOPPED", "FAILED"):
                 # WAHA's own guidance for a dead session (whether never-
                 # started or crashed mid-pairing): restart, not start.

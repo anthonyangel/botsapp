@@ -15,7 +15,10 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   `app.py` (kept separate from `main.py` so `tools.py` can import it without
   a circular dependency); tools live in `tools.py`.
 - `botsapp.admin_main:app` — the admin UI, port 8100. Starlette app in
-  `admin/app.py`, hand-rolled f-string templates in `admin/templates.py`
+  `admin/app.py`, login + route policy in `admin/auth.py` (AuthKit via an
+  `AuthKitClient` protocol, signed-cookie session, per-request role lookup,
+  Origin check for CSRF), `admin/users.py` and `admin/accounts.py` (Users and
+  Accounts pages), hand-rolled f-string templates in `admin/templates.py`
   (no Jinja2 — the UI is a handful of pages, not enough surface to justify
   the dependency).
 
@@ -31,12 +34,31 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   [0004](../docs/decisions/0004-chat-allowlist-and-admin-ui.md). Raises
   `ChatNotAllowedError` (distinct from "no such chat") when a jid exists but
   isn't allowlisted.
+- `bridge_registry.py` — `BridgeRegistry`: one `WAHAClient` per `accounts` row (its own
+  WAHA session), built lazily; maps account → client, decides no authorization.
+  See [0025](../docs/decisions/0025-multi-tenancy-users-accounts-grants.md).
+- `secretbox.py` / `waha_keys.py` / `key_manager.py` — scoped WAHA session keys
+  ([0027](../docs/decisions/0027-scoped-waha-session-keys.md)): Fernet encryption of the
+  stored keys, WAHA key parsing + the `KeyApi` protocol, and `KeyManager`
+  (provision/rotate/verify/revoke: change WAHA, read it back, then record). The registry
+  takes a required `purpose` (`"mcp"` = the account's scoped key, `"admin"` = the admin
+  key) and fails closed under `WAHA_REQUIRE_SCOPED_KEYS`.
+- `capabilities.py` / `tool_scopes.py` — tool visibility from key scopes
+  ([0027](../docs/decisions/0027-scoped-waha-session-keys.md)): a tool's WAHA-action tags
+  (`read`, `send`, ...) are what it needs; `WahaScopeMiddleware` hides and refuses tools no
+  account's key can serve, and `resolve_scope` checks the specific account. Keep a tool's
+  tags honest: label WAHA-calling tools with the action, `local` ones with none.
+- `scope.py` — `resolve_scope(account)`: per tool call, caller email (token) +
+  account → `Scope(bridge, ScopedChatDb, AllowlistedMessageStore)` bound to that
+  (account, viewer). Every reachable tool must start with it; never read
+  allowlist/tags straight from `state.db`.
 - `bridge_factory.py` — `build_bridge_and_store()`, the one place that
   constructs the bridge; both `app.py` and `admin/app.py` call it so
   construction can't drift between the two processes. One `WAHAClient`
   instance satisfies both the `Bridge` and `MessageStore` protocols.
-- `db.py` — `DatabaseManager`, SQLite (`aiosqlite`) for `chat_metadata`
-  (tags + `is_allowed`) only — not chat/message history, that's
+- `db.py` — `DatabaseManager`, SQLite (`aiosqlite`) for users, accounts, grants and
+  per-(account, viewer) `chat_access` (tags + `is_allowed`); legacy
+  `chat_metadata`/`allowed_emails` are no longer read — not chat/message history, that's
   `MessageStore`'s job. Shared file, WAL mode, read by both processes
   ([0007](../docs/decisions/0007-sqlite-for-metadata-store.md)).
 - `session.py` — WhatsApp session/QR pairing logic, called from both
@@ -55,7 +77,7 @@ processes inside one Fly Machine once deployed via `server/start.sh` — see
   env var, see [0015](../docs/decisions/0015-email-allowlist-in-db.md)),
   `LOCAL_DEV_DISABLE_AUTH` escape hatch (dev only — does *not* relax the
   outbound-tag block).
-- `state.py` — module-level globals (`db`, `bridge`, `message_store`, `mcp`)
+- `state.py` — module-level globals (`db`, `bridge`, `registry`, `admin_chat_db`)
   set up in `app.py`'s lifespan; tools read through this rather than a
   request-scoped context.
 - `_authkit_issuer_workaround.py` — works around the open bug in

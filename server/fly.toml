@@ -44,6 +44,26 @@ primary_region = "fra"
   # never a public URL. Update if the waha app is ever named differently.
   WAHA_URL = "http://botsapp-waha.internal:3000"
   WAHA_SESSION = "default"
+  # REQUIRED: the first admin's email (docs/decisions/0025). Owns the primary
+  # WhatsApp account; the pre-multi-tenancy allowlist/tags are adopted into it
+  # on first start. Left empty, nothing is visible to the MCP server.
+  BOTSAPP_ADMIN_EMAIL = ""
+  # Admin UI login (docs/decisions/0026). It refuses to start without either the
+  # login settings (WORKOS_CLIENT_ID, WORKOS_API_KEY, BOTSAPP_SESSION_SECRET as
+  # `fly secrets`; ADMIN_BASE_URL, optionally WORKOS_ORG_ID, here) or an explicit
+  # opt-out. Until login is configured and verified against live WorkOS, keep the
+  # admin UI private and set ADMIN_DISABLE_AUTH = "true" — it affects the admin UI
+  # only (unlike LOCAL_DEV_DISABLE_AUTH, which would also open the MCP server).
+  # Note start.sh backgrounds the admin UI, so a refusal to start is silent to
+  # Fly's health checks: check `fly logs` after deploying.
+  ADMIN_DISABLE_AUTH = "true"
+  # Scoped WAHA keys (docs/decisions/0027). BOTSAPP_SECRET_KEY, the master key that
+  # encrypts the stored keys, is a `fly secrets` value, never set here. Rollout: set it,
+  # deploy, create each account's key on the Accounts page (including "default"), check
+  # the MCP server still works, THEN uncomment the line below. In strict mode start.sh
+  # withholds WAHA_API_KEY from the MCP process and the MCP server refuses accounts
+  # without a key. To undo, remove the line and redeploy.
+  # WAHA_REQUIRE_SCOPED_KEYS = "true"
   LOG_LEVEL = "INFO"
   # This app's own public URL — must match whatever `fly apps create`
   # actually names it (https://<app-name>.fly.dev).
@@ -53,5 +73,5 @@ primary_region = "fra"
   # see .env.example) OPENAI_API_KEY are the ones that go through
   # `fly secrets set` instead, never here. There's no ALLOWED_EMAILS to set
   # either way — the email allowlist lives in the DB now, managed from the
-  # admin UI's Access tab. See docs/decisions/0015-email-allowlist-in-db.md.
+  # admin UI's Users page. See docs/decisions/0015 and 0026.
   WORKOS_AUTHKIT_DOMAIN = ""

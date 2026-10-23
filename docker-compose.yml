@@ -6,6 +6,10 @@ x-bridge-env: &bridge-env
   WAHA_URL: http://waha:3000
   WAHA_API_KEY: ${WAHA_API_KEY:-}
   WAHA_SESSION: ${WAHA_SESSION:-default}
+  BOTSAPP_ADMIN_EMAIL: ${BOTSAPP_ADMIN_EMAIL:-}
+  # Scoped WAHA keys (docs/decisions/0027), see .env.example.
+  BOTSAPP_SECRET_KEY: ${BOTSAPP_SECRET_KEY:-}
+  WAHA_REQUIRE_SCOPED_KEYS: ${WAHA_REQUIRE_SCOPED_KEYS:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   TZ: Asia/Jerusalem
 
@@ -64,7 +68,7 @@ services:
       WORKOS_AUTHKIT_DOMAIN: ${WORKOS_AUTHKIT_DOMAIN}
       MCP_BASE_URL: ${MCP_BASE_URL:-http://localhost:8000}
       # No ALLOWED_EMAILS here — the email allowlist lives in the DB, set
-      # via the admin UI's Access tab. See
+      # via the admin UI's Users page. See
       # docs/decisions/0015-email-allowlist-in-db.md.
       LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
       # Optional — voice-note transcription only, see .env.example.
@@ -79,15 +83,24 @@ services:
     restart: unless-stopped
 
   admin-ui:
-    # Network-private by design — no login of its own, so it must never get
-    # a non-loopback port binding here, and never a public Fly service when
-    # deployed. Same image as mcp-server, different entrypoint.
+    # Behind an AuthKit login (docs/decisions/0026, admin/auth.py) unless
+    # LOCAL_DEV_DISABLE_AUTH/ADMIN_DISABLE_AUTH is set. The login has not been
+    # exercised against a live WorkOS environment yet, so keep this loopback-
+    # only and off any public Fly service until it has. Same image as
+    # mcp-server, different entrypoint.
     build: ./server
     command: ["uv", "run", "uvicorn", "botsapp.admin_main:app", "--host", "0.0.0.0", "--port", "8100"]
     ports:
       - "127.0.0.1:8100:8100"
     environment:
       <<: *bridge-env
+      LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
+      ADMIN_DISABLE_AUTH: ${ADMIN_DISABLE_AUTH:-}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
+      WORKOS_API_KEY: ${WORKOS_API_KEY:-}
+      WORKOS_ORG_ID: ${WORKOS_ORG_ID:-}
+      ADMIN_BASE_URL: ${ADMIN_BASE_URL:-http://localhost:8100}
+      BOTSAPP_SESSION_SECRET: ${BOTSAPP_SESSION_SECRET:-}
     volumes:
       - metadata-data:/app/data
     depends_on:
