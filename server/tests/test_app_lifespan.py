@@ -56,3 +56,20 @@ async def test_accounts_without_keys_are_logged_at_startup(env, monkeypatch, cap
         async with lifespan(mcp):
             pass
     assert "accounts without a scoped WAHA key: default" in caplog.text
+
+
+async def test_an_unconfigured_owner_is_called_out_loudly_at_startup(env, monkeypatch, caplog):
+    monkeypatch.setenv("WAHA_API_KEY", "ADMIN")
+    with caplog.at_level("ERROR"):
+        async with lifespan(mcp):
+            pass
+    assert "No WhatsApp accounts exist" in caplog.text and "BOTSAPP_ADMIN_EMAIL" in caplog.text
+
+
+async def test_no_startup_error_once_an_account_exists(env, monkeypatch, caplog):
+    monkeypatch.setenv("WAHA_API_KEY", "ADMIN")
+    monkeypatch.setenv("BOTSAPP_ADMIN_EMAIL", "me@example.com")
+    with caplog.at_level("ERROR"):
+        async with lifespan(mcp):
+            pass
+    assert "No WhatsApp accounts exist" not in caplog.text

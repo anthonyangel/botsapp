@@ -182,3 +182,17 @@ async def test_deleting_a_session_drops_both_purposes_clients(db, box):
     assert not registry._clients
     admin.close.assert_awaited_once()
     mcp.close.assert_awaited_once()
+
+
+async def test_close_finishes_clients_still_waiting_out_their_grace_period(db, box):
+    await _give_key(db, box)
+    registry = BridgeRegistry(db, "http://waha", "ADMIN_KEY", box=box)
+    first = await registry.for_account("her", purpose="mcp")
+    first.close = AsyncMock()
+    await _give_key(db, box, secret="wk_rotated")
+    await registry.for_account("her", purpose="mcp")  # rotation: `first` is queued to close
+    assert registry._closing  # held, so the task can't be garbage-collected
+    first.close.assert_not_awaited()  # still inside the grace period
+    await registry.close()
+    first.close.assert_awaited_once()
+    assert not registry._closing
