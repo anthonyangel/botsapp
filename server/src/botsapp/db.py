@@ -78,7 +78,19 @@ class DatabaseManager:
         have = {row[1] async for row in cursor}
         for column in ("waha_key_id", "waha_key_ciphertext", "waha_key_actions"):
             if column not in have:
-                await self.connection.execute(f"ALTER TABLE accounts ADD COLUMN {column} TEXT")
+                await self._add_text_column("accounts", column)
+
+    async def _add_text_column(self, table: str, column: str) -> None:
+        """``ALTER TABLE .. ADD COLUMN``, tolerating another process having just added
+        it. The MCP server and the admin UI both run this at startup against the same
+        file, and the check above and the ALTER are not atomic: on the first start
+        after an upgrade the loser would otherwise crash (the admin UI, being
+        backgrounded on Fly, would then stay down)."""
+        try:
+            await self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        except aiosqlite.OperationalError as exc:
+            if "duplicate column name" not in str(exc):
+                raise
 
     @staticmethod
     def _account_row(row: aiosqlite.Row) -> dict[str, Any]:

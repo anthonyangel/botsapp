@@ -422,3 +422,41 @@ async def test_an_accounts_table_from_before_the_key_columns_is_migrated(tmp_pat
     await old.set_account_key("default", "k", "C", {"read": True})
     assert await old.get_account_key("default") is not None
     await old.close()
+
+
+async def test_adding_a_column_another_process_just_added_is_not_an_error(tmp_path):
+    """The MCP server and the admin UI run the migration at the same time on the
+    first start after an upgrade; the loser of the check-then-ALTER race must not
+    crash (a crashed admin UI stays down on Fly)."""
+    manager = DatabaseManager(str(tmp_path / "race.db"))
+    await manager.connect()
+    await manager.ensure_schema()
+    await manager._add_text_column("accounts", "waha_key_id")  # already there: fine
+    with pytest.raises(Exception, match="no such table"):
+        await manager._add_text_column("nope", "x")  # other errors still surface
+    await manager.close()
+
+
+async def test_two_processes_migrating_an_old_database_at_once_both_succeed(tmp_path):
+    import asyncio
+
+    for trial in range(15):  # the race is timing-dependent, so give it many chances
+        path = str(tmp_path / f"old{trial}.db")
+        old = DatabaseManager(path)
+        await old.connect()
+        await old.connection.execute(
+            "CREATE TABLE users (email TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', "
+            "is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT '')"
+        )
+        await old.connection.execute(
+            "CREATE TABLE accounts (id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, "
+            "label TEXT NOT NULL DEFAULT '', waha_session TEXT NOT NULL UNIQUE, "
+            "created_at TEXT NOT NULL DEFAULT '')"
+        )
+        await old.connection.commit()
+        await old.close()
+        a, b = DatabaseManager(path), DatabaseManager(path)
+        await asyncio.gather(a.connect(), b.connect())
+        results = await asyncio.gather(a.ensure_schema(), b.ensure_schema(), return_exceptions=True)
+        await asyncio.gather(a.close(), b.close())
+        assert [r for r in results if isinstance(r, Exception)] == []

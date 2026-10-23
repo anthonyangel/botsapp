@@ -99,6 +99,11 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
         # Adopts the single-tenant data as the first admin's primary account
         # (idempotent) — docs/decisions/0025.
         await state.db.bootstrap(admin_email, os.environ.get("WAHA_SESSION", "default"))
+    if not await state.db.list_accounts():
+        logger.error(
+            "No WhatsApp accounts exist, so no tool will return anything. Set "
+            "BOTSAPP_ADMIN_EMAIL to the owner's email (docs/decisions/0025)."
+        )
 
     box = SecretBox.from_env()  # raises if BOTSAPP_SECRET_KEY is malformed
     if scoped_keys_required() and box is None:

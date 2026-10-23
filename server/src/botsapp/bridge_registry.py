@@ -98,6 +98,8 @@ class BridgeRegistry:
         # (waha_session, purpose) -> (fingerprint of the key it was built with, client)
         self._clients: dict[tuple[str, str], tuple[str, WAHAClient]] = {}
         self._warned_fallback: set[str] = set()
+        # Stale clients waiting out their grace period before being closed.
+        self._closing: dict[asyncio.Task[None], WAHAClient] = {}
         self._clients_lock = asyncio.Lock()
 
     # ── clients ──────────────────────────────────────────────────────────
@@ -115,7 +117,9 @@ class BridgeRegistry:
             client = WAHAClient(self._base_url, api_key, session=session)
             self._clients[(session, purpose)] = (fingerprint, client)
         if stale is not None:  # the key changed (rotation): drop the stale client
-            asyncio.create_task(self._close_after_grace(stale))
+            task = asyncio.create_task(self._close_after_grace(stale))
+            self._closing[task] = stale  # keeps a reference, and lets close() finish it
+            task.add_done_callback(lambda t: self._closing.pop(t, None))
         return client
 
     async def _close_after_grace(self, client: WAHAClient) -> None:
@@ -191,4 +195,9 @@ class BridgeRegistry:
     async def close(self) -> None:
         clients, self._clients = list(self._clients.values()), {}
         for _fingerprint, client in clients:
+            await client.close()
+        # Don't leave rotated-out clients waiting for their grace period at shutdown.
+        waiting, self._closing = dict(self._closing), {}
+        for task, client in waiting.items():
+            task.cancel()
             await client.close()
