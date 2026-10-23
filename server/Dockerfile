@@ -1,6 +1,10 @@
 FROM python:3.13-slim@sha256:27b7c9d4f13ca20bb1170148f02095d50a5dfce1f7f2dabf5ca273727e43b7ea
 
 COPY --from=ghcr.io/astral-sh/uv:latest@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /usr/local/bin/uv
+# Caddy (docs/decisions/0028): fronts mcp-server and admin-ui on one Fly
+# port; see start.sh and Caddyfile. A static binary copied from the official
+# image, not installed via apt — no package manager setup, no extra layer.
+COPY --from=caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489 /usr/bin/caddy /usr/local/bin/caddy
 
 WORKDIR /app
 
@@ -10,7 +14,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ src/
-COPY start.sh ./
+COPY start.sh Caddyfile ./
 RUN uv sync --frozen --no-dev && chmod +x start.sh
 
 EXPOSE 8000

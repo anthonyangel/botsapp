@@ -1,8 +1,10 @@
-# Fly app for mcp-server + admin-ui — see docs/decisions/0013. Both run as
-# separate processes inside this one Machine (server/start.sh), sharing the
-# two volumes below; only port 8000 (mcp-server) is ever declared as a
-# public service, so port 8100 (admin-ui) stays reachable only over Fly's
-# private 6PN networking / `fly proxy`, never the public internet.
+# Fly app for mcp-server + admin-ui — see docs/decisions/0013, 0028. Both run
+# as separate processes inside this one Machine (server/start.sh), sharing the
+# two volumes below. Only port 8000 is ever declared as a public service —
+# but since 0028, that's Caddy (see server/Caddyfile), fronting both
+# processes on this one port: /admin/* reaches admin-ui (still only over
+# Fly's private 6PN networking directly, e.g. `fly proxy`, never via a port
+# of its own), everything else reaches mcp-server.
 #
 # App name/region are placeholders — set at `fly launch`/`fly apps create`
 # time; `app` here must match whatever name actually got created.
@@ -48,15 +50,23 @@ primary_region = "fra"
   # WhatsApp account; the pre-multi-tenancy allowlist/tags are adopted into it
   # on first start. Left empty, nothing is visible to the MCP server.
   BOTSAPP_ADMIN_EMAIL = ""
-  # Admin UI login (docs/decisions/0026). It refuses to start without either the
-  # login settings (WORKOS_CLIENT_ID, WORKOS_API_KEY, BOTSAPP_SESSION_SECRET as
-  # `fly secrets`; ADMIN_BASE_URL, optionally WORKOS_ORG_ID, here) or an explicit
-  # opt-out. Until login is configured and verified against live WorkOS, keep the
-  # admin UI private and set ADMIN_DISABLE_AUTH = "true" — it affects the admin UI
-  # only (unlike LOCAL_DEV_DISABLE_AUTH, which would also open the MCP server).
-  # Note start.sh backgrounds the admin UI, so a refusal to start is silent to
-  # Fly's health checks: check `fly logs` after deploying.
-  ADMIN_DISABLE_AUTH = "true"
+  # Admin UI login (docs/decisions/0026). It refuses to start without either
+  # the login settings (WORKOS_CLIENT_ID, WORKOS_API_KEY, BOTSAPP_SESSION_SECRET
+  # as `fly secrets`; ADMIN_BASE_URL, optionally WORKOS_ORG_ID, here) or an
+  # explicit opt-out below. With 0028 exposing /admin publicly, leaving login
+  # off means "anyone who can reach https://<host>/admin acts as
+  # BOTSAPP_ADMIN_EMAIL with no login at all" — set ADMIN_DISABLE_AUTH="true"
+  # here (and redeploy) only as an emergency fallback if login itself breaks;
+  # it affects the admin UI only (unlike LOCAL_DEV_DISABLE_AUTH, which would
+  # also open the MCP server). Note start.sh backgrounds the admin UI, so a
+  # refusal to start is silent to Fly's health checks: check `fly logs`.
+  # ADMIN_DISABLE_AUTH = "true"
+  # The path admin-ui's routes, redirects and templates are all built under
+  # (docs/decisions/0028) — must match server/Caddyfile's /admin/* handler,
+  # which forwards the path unstripped. Empty for direct access (local dev,
+  # `fly proxy`); set here because Fly's deploy fronts both processes behind
+  # Caddy on one port.
+  ADMIN_URL_PREFIX = "/admin"
   # Scoped WAHA keys (docs/decisions/0027). BOTSAPP_SECRET_KEY, the master key that
   # encrypts the stored keys, is a `fly secrets` value, never set here. Rollout: set it,
   # deploy, create each account's key on the Accounts page (including "default"), check

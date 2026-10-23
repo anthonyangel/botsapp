@@ -55,6 +55,7 @@ from workos import AsyncWorkOSClient, TransportError, WorkOSError
 import botsapp.state as state
 from botsapp.admin import templates
 from botsapp.admin.directory import DirectoryError, UserDirectory, WorkOSUserDirectory
+from botsapp.admin.prefix import PREFIX, p
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ STATE_TTL_SECONDS = 10 * 60
 MIN_SECRET_LENGTH = 32
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-_PUBLIC_PATHS = {"/login", "/auth/callback", "/logout"}
+_PUBLIC_PATHS = {p("/login"), p("/auth/callback"), p("/logout")}
 
 
 # ── AuthKit client ───────────────────────────────────────────────────────────
@@ -144,7 +145,7 @@ class AdminAuthConfig:
 
     @property
     def redirect_uri(self) -> str:
-        return f"{self.base_url.rstrip('/')}/auth/callback"
+        return f"{self.base_url.rstrip('/')}{p('/auth/callback')}"
 
 
 # Set by admin.app's lifespan (tests assign it directly), like state.db.
@@ -252,13 +253,15 @@ def _safe_next(target: str | None) -> str:
     """Only same-site relative paths: no scheme, no `//host`, no backslashes."""
     if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
         return target
-    return "/"
+    return p("/")
 
 
 # ── Policy ───────────────────────────────────────────────────────────────────
 
 
 def _policy(path: str) -> str:
+    if PREFIX and path.startswith(PREFIX):
+        path = path[len(PREFIX) :] or "/"
     if path.startswith(("/users", "/access")):
         return "admin"
     if path == "/accounts/create" or (path.startswith("/accounts/") and path.endswith("/delete")):
@@ -298,7 +301,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not email:
             if request.method in _SAFE_METHODS:
                 query = urlencode({"next": request.url.path})
-                return RedirectResponse(url=f"/login?{query}", status_code=303)
+                return RedirectResponse(url=f"{p('/login')}?{query}", status_code=303)
             return PlainTextResponse("Not signed in", status_code=401)
 
         assert state.db is not None
@@ -324,10 +327,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             bool(user["is_admin"]) or chosen["owner_email"] == email
         )
         if policy == "owner" and not can_manage_session:
-            if request.url.path == "/" and request.method == "GET":
+            if request.url.path == p("/") and request.method == "GET":
                 # The landing page is the Session page; for someone who only has
                 # a shared account, send them somewhere they can act.
-                return RedirectResponse(url="/accounts", status_code=303)
+                return RedirectResponse(url=p("/accounts"), status_code=303)
             if chosen is None:
                 return _denied(403, "You don't have a WhatsApp account yet.")
             return _denied(403, "Only the account's owner can manage its session.")
@@ -431,7 +434,7 @@ async def auth_callback(request: Request) -> Response:
 
     await _mirror_role(cfg, user.email)
 
-    response = RedirectResponse(url=_safe_next(str(pending.get("n", "/"))), status_code=303)
+    response = RedirectResponse(url=_safe_next(str(pending.get("n", p("/")))), status_code=303)
     _set_cookie(response, cfg, SESSION_COOKIE, issue_session(cfg, user.email), SESSION_TTL_SECONDS)
     response.delete_cookie(STATE_COOKIE, path="/")
     return response
@@ -461,7 +464,8 @@ async def logout(_request: Request) -> Response:
     # bouncing straight into /login would silently sign the user back in.
     response = HTMLResponse(
         templates.message_page(
-            "Signed out", 'You have been signed out. <a href="/login">Sign in again</a>.'
+            "Signed out",
+            f'You have been signed out. <a href="{p("/login")}">Sign in again</a>.',
         )
     )
     response.delete_cookie(SESSION_COOKIE, path="/")
@@ -469,7 +473,7 @@ async def logout(_request: Request) -> Response:
 
 
 routes = [
-    Route("/login", login),
-    Route("/auth/callback", auth_callback),
-    Route("/logout", logout),
+    Route(p("/login"), login),
+    Route(p("/auth/callback"), auth_callback),
+    Route(p("/logout"), logout),
 ]
