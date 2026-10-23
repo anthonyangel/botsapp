@@ -242,6 +242,37 @@ def test_chats_page_shows_groups_loaded_gap(client):
     assert "Loaded 1/2 groups" in r.text
 
 
+def test_groups_tab_is_ordered_by_chat_activity_not_list_groups_order(client):
+    # list_groups() itself carries no order; the chats list (get_chats)
+    # does, newest-activity first — reuse that ordering for the groups tab
+    # instead of whatever list_groups() happened to return them in.
+    state.bridge.get_chats.return_value = [
+        {"jid": "newest@g.us", "name": "newest"},
+        {"jid": "middle@g.us", "name": "middle"},
+        {"jid": "oldest@g.us", "name": "oldest"},
+    ]
+    state.bridge.list_groups.return_value = [
+        GroupInfo(jid="oldest@g.us", name="Oldest Group"),
+        GroupInfo(jid="newest@g.us", name="Newest Group"),
+        GroupInfo(jid="middle@g.us", name="Middle Group"),
+    ]
+    r = client.get("/chats")
+    positions = [r.text.index(n) for n in ("Newest Group", "Middle Group", "Oldest Group")]
+    assert positions == sorted(positions)
+
+
+def test_groups_with_no_chat_history_sort_after_active_ones(client):
+    state.bridge.get_chats.return_value = [
+        {"jid": "active@g.us", "name": "active"},
+    ]
+    state.bridge.list_groups.return_value = [
+        GroupInfo(jid="never-messaged@g.us", name="Quiet Group"),
+        GroupInfo(jid="active@g.us", name="Active Group"),
+    ]
+    r = client.get("/chats")
+    assert r.text.index("Active Group") < r.text.index("Quiet Group")
+
+
 def test_chats_page_hides_groups_loaded_note_once_caught_up(client):
     state.bridge.get_chats.return_value = [
         {"jid": "g1@g.us", "name": "g1"},
