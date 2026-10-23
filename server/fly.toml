@@ -65,6 +65,13 @@ primary_region = "fra"
   # without a key. To undo, remove the line and redeploy.
   # WAHA_REQUIRE_SCOPED_KEYS = "true"
   LOG_LEVEL = "INFO"
+  # FastMCP's default logger uses rich, which word-wraps to a fixed console
+  # width even when stderr isn't a TTY — on Fly this chops a single log
+  # statement (e.g. workos.py's "AuthKit tokens will be validated..." line)
+  # into several physical lines, which Fly's log collector then shows as
+  # separate, out-of-order log entries. Plain logging keeps each record on
+  # one line.
+  FASTMCP_ENABLE_RICH_LOGGING = "false"
   # This app's own public URL — must match whatever `fly apps create`
   # actually names it (https://<app-name>.fly.dev).
   MCP_BASE_URL = "https://botsapp.fly.dev"
