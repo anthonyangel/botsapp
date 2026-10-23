@@ -29,6 +29,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0025 — Multi-tenancy: users, accounts, grants, per-viewer chat access](0025-multi-tenancy-users-accounts-grants.md) *(login mechanism deferred to 0026)*
 - [0026 — Admin login via AuthKit, one WorkOS org, and the authn/authz split](0026-admin-login-authkit-single-org-authn-authz-split.md) *(will supersede the no-login-admin invariant in 0004/0013 once implemented; amends the "no WorkOS RBAC" stance)*
 - [0027 — Per-account scoped WAHA session keys, encrypted in the database](0027-scoped-waha-session-keys.md) *(amends 0025; implemented against a stub, not yet verified live)*
+- [0028 — Admin UI goes public on one port, via Caddy and an `/admin` prefix](0028-caddy-fronted-admin-ui-public-prefix.md) *(supersedes the no-public-admin-ui framing in 0004/0013/0026)*
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 

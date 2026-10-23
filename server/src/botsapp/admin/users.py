@@ -40,14 +40,15 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 import botsapp.state as state
 from botsapp.admin import auth, templates
 from botsapp.admin.directory import ROLES, DirectoryError
+from botsapp.admin.prefix import p
 
 logger = logging.getLogger(__name__)
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def _back(kind: str, text: str, path: str = "/users") -> RedirectResponse:
-    return RedirectResponse(url=f"{path}?{urlencode({kind: text})}", status_code=303)
+def _back(kind: str, text: str, path: str | None = None) -> RedirectResponse:
+    return RedirectResponse(url=f"{path or p('/users')}?{urlencode({kind: text})}", status_code=303)
 
 
 def _form_text(form: FormData, key: str) -> str:
@@ -59,7 +60,7 @@ def _actor(request: Request) -> str:
     return request.state.user["email"]
 
 
-async def live_admin_check(request: Request, back_to: str = "/users") -> Response | None:
+async def live_admin_check(request: Request, back_to: str | None = None) -> Response | None:
     """None if the caller is still an admin according to WorkOS, else a response
     (a redirect with an error to ``back_to``, or a 403)."""
     cfg = auth.config

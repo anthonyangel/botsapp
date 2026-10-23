@@ -17,6 +17,12 @@ def _run(tmp_path: Path, **env: str) -> dict[str, str]:
     uv = bin_dir / "uv"
     uv.write_text('#!/bin/sh\necho "$* KEY=${WAHA_API_KEY-<unset>}"\n')
     uv.chmod(0o755)
+    # start.sh execs caddy last (0028) — a stub that exits straight away, like
+    # the uv stub above, so the script completes instead of blocking on (or
+    # failing to find) a real reverse proxy.
+    caddy = bin_dir / "caddy"
+    caddy.write_text('#!/bin/sh\necho "caddy $*"\n')
+    caddy.chmod(0o755)
     result = subprocess.run(
         ["sh", str(SCRIPT)],
         capture_output=True,
@@ -27,6 +33,8 @@ def _run(tmp_path: Path, **env: str) -> dict[str, str]:
     )
     lines = {}
     for line in result.stdout.splitlines():
+        if "KEY=" not in line:
+            continue  # the caddy stub's own line — not a uv process
         which = "mcp" if "botsapp.main:app" in line else "admin"
         lines[which] = line.rsplit("KEY=", 1)[1]
     return lines

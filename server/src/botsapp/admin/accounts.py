@@ -32,6 +32,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 import botsapp.state as state
 from botsapp.admin import auth, templates
+from botsapp.admin.prefix import p
 from botsapp.admin.users import _back, _form_text, live_admin_check
 from botsapp.bridge_registry import session_name_for
 from botsapp.key_manager import KeyManagerError, describe_drift, drift_from_policy
@@ -39,7 +40,7 @@ from botsapp.key_manager import KeyManagerError, describe_drift, drift_from_poli
 logger = logging.getLogger(__name__)
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$")
-_BACK = "/accounts"
+_BACK = p("/accounts")
 
 
 def _err(text: str) -> RedirectResponse:

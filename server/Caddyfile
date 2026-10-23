@@ -1,0 +1,24 @@
+# Fronts mcp-server and admin-ui on one port (docs/decisions/0028), run by
+# start.sh as the only thing Fly's public [http_service] (port 8000) reaches.
+#
+# /admin/* is forwarded unstripped — admin-ui's own routes, redirects and
+# templates are built with the /admin prefix baked in (ADMIN_URL_PREFIX, see
+# admin/prefix.py), so it must see the full path, not a stripped one.
+# Everything else goes to mcp-server, unprefixed, unchanged.
+{
+	admin off
+}
+
+:8000 {
+	# Both forms: Starlette's own routes are registered as e.g. /admin/
+	# (trailing slash, its own redirect_slashes handles the bare /admin
+	# case) — but matching /admin/* alone wouldn't match the bare /admin at
+	# all, falling through to mcp-server below. Match both explicitly.
+	@admin path /admin /admin/*
+	handle @admin {
+		reverse_proxy [::1]:8100
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8001
+	}
+}

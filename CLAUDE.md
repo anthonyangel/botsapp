@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0027.
+been kept in date order, current through 0028.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -33,8 +33,9 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
 | Service | What | Reachable from |
 |---|---|---|
 | `waha` | WhatsApp bridge, NOWEB engine (`devlikeapro/waha:noweb-<version>` on Fly, `noweb-arm-<version>` locally — version-pinned, never `dev`; see [0023](docs/decisions/0023-waha-noweb-version-pinned-images.md)) | private only, always |
-| `mcp-server` | The MCP endpoint (`botsapp.main:app`, port 8000) — the *only* thing meant to be public | public, gated by WorkOS AuthKit login |
-| `admin-ui` | QR login + chat allowlist/tags (`botsapp.admin_main:app`, port 8100) — same image as `mcp-server`, different `command:` | private until the AuthKit login ([0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md), `admin/auth.py`) is verified against live WorkOS; then reachable behind that login. Needs login settings or an explicit `ADMIN_DISABLE_AUTH` |
+| `mcp-server` | The MCP endpoint (`botsapp.main:app`, internal port 8001 on Fly) | public, via the Caddy proxy below, gated by WorkOS AuthKit login |
+| `admin-ui` | QR login + chat allowlist/tags (`botsapp.admin_main:app`, port 8100) — same image as `mcp-server`, different `command:` | public too, under `/admin` ([0028](docs/decisions/0028-caddy-fronted-admin-ui-public-prefix.md)), behind its own AuthKit login ([0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md), `admin/auth.py`); also reachable directly over Fly's private 6PN (`fly proxy`). Needs login settings or an explicit `ADMIN_DISABLE_AUTH` fallback |
+| *(Fly only)* `caddy` | Reverse proxy ([0028](docs/decisions/0028-caddy-fronted-admin-ui-public-prefix.md), `server/Caddyfile`): the only thing Fly's `[http_service]` (port 8000) reaches — routes `/admin/*` to admin-ui, everything else to mcp-server | public |
 
 - `mcp-server` and `admin-ui` share one SQLite file (`chat_metadata.db`, WAL
   mode) for tags/allowlist — see [0007](docs/decisions/0007-sqlite-for-metadata-store.md).
@@ -49,9 +50,10 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   per-caller scope (`server/src/botsapp/scope.py`). The admin UI has the AuthKit
   login decided in
   [0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md)
-  (built and tested against a stubbed WorkOS client; not yet verified live;
-  one WorkOS org, role in WorkOS, grants and chat visibility in the DB). Its
-  Session and Chats pages act on the account selected in the header (a validated
+  (one WorkOS org, role in WorkOS, grants and chat visibility in the DB), now
+  reachable publicly under `/admin` behind that login rather than only over
+  Fly's private network ([0028](docs/decisions/0028-caddy-fronted-admin-ui-public-prefix.md)).
+  Its Session and Chats pages act on the account selected in the header (a validated
   cookie); the Accounts and Users pages manage accounts, sharing and people.
   Needs `BOTSAPP_ADMIN_EMAIL`. Each account's MCP access can use its own read-only
   WAHA session key, stored encrypted ([0027](docs/decisions/0027-scoped-waha-session-keys.md);

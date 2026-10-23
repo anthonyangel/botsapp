@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
+from botsapp.admin.prefix import p
+
 _MDL_VERSION = "1.3.0"
 _MDL_CSS = (
     f"https://cdnjs.cloudflare.com/ajax/libs/material-design-lite/{_MDL_VERSION}/"
@@ -138,7 +140,7 @@ chat_view: ContextVar[ChatView] = ContextVar("admin_chat_view", default=_DEFAULT
 
 
 def _chat_url(jid: str, op: str) -> str:
-    base = f"/chats/{html.escape(jid, quote=True)}/{op}"
+    base = f"{p('/chats')}/{html.escape(jid, quote=True)}/{op}"
     viewer = chat_view.get().for_viewer
     return f"{base}?viewer={html.escape(quote(viewer, safe='@'), quote=True)}" if viewer else base
 
@@ -162,7 +164,7 @@ def _chat_header() -> str:
     <p class="tab-note">
       <label>Showing visibility for
         <select aria-label="Viewer"
-                onchange="location.href='/chats?viewer='+encodeURIComponent(this.value)">
+                onchange="location.href='{p("/chats")}?viewer='+encodeURIComponent(this.value)">
           {options}</select></label><br>{note}
     </p>"""
     if not view.can_toggle:
@@ -186,7 +188,7 @@ def _select_account_form(account_id: str, *, label: str, next_url: str | None = 
     requests) rather than an `<a href>`/`location.href` navigation.
     """
     aid = html.escape(quote(account_id, safe=""), quote=True)
-    action = f"/accounts/{aid}/select"
+    action = f"{p('/accounts')}/{aid}/select"
     if next_url:
         action += f"?next={html.escape(quote(next_url, safe=''), quote=True)}"
     return (
@@ -201,14 +203,14 @@ def _nav_html() -> str:
     ctx = nav.get()
     links = []
     if ctx.can_manage_session:
-        links.append('<a class="mdl-navigation__link" href="/">Session</a>')
+        links.append(f'<a class="mdl-navigation__link" href="{p("/")}">Session</a>')
     links += [
-        '<a class="mdl-navigation__link" href="/chats">Chats &amp; Groups</a>',
-        '<a class="mdl-navigation__link" href="/accounts">Accounts</a>',
+        f'<a class="mdl-navigation__link" href="{p("/chats")}">Chats &amp; Groups</a>',
+        f'<a class="mdl-navigation__link" href="{p("/accounts")}">Accounts</a>',
     ]
     if ctx.is_admin:
-        links.append('<a class="mdl-navigation__link" href="/users">Users</a>')
-    links.append('<a class="mdl-navigation__link" href="/logout">Sign out</a>')
+        links.append(f'<a class="mdl-navigation__link" href="{p("/users")}">Users</a>')
+    links.append(f'<a class="mdl-navigation__link" href="{p("/logout")}">Sign out</a>')
     switcher = ""
     if len(ctx.accounts) > 1:
         options = "".join(
@@ -219,7 +221,7 @@ def _nav_html() -> str:
         switcher = (
             '<form method="post" style="display:inline-block;margin-right:16px;">'
             '<select aria-label="Account" '
-            "onchange=\"this.form.action='/accounts/'+encodeURIComponent(this.value)"
+            f"onchange=\"this.form.action='{p('/accounts')}/'+encodeURIComponent(this.value)"
             "+'/select'; this.form.submit();\">"
             f"{options}</select></form>"
         )
@@ -292,7 +294,8 @@ def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
         <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:420px;padding:24px;">
           <p><span class="status-dot disconnected"></span>Can't reach the bridge</p>
           <p class="tab-note">{html.escape("; ".join(status["errors"]))}</p>
-          <a class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored" href="/">
+          <a class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
+             href="{p("/")}">
             Retry
           </a>
         </div>"""
@@ -315,14 +318,14 @@ def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
           <p><span class="status-dot connected"></span><strong>Connected</strong></p>
           {identity_html}
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
-            <form method="post" action="/session/disconnect">
+            <form method="post" action="{p("/session/disconnect")}">
               <button class="mdl-button mdl-js-button mdl-button--raised" type="submit"
                       title="Log out gracefully — session stays in STOPPED state; click Connect
                              WhatsApp to re-pair">
                 Disconnect
               </button>
             </form>
-            <form method="post" action="/session/delete"
+            <form method="post" action="{p("/session/delete")}"
                   onsubmit="return confirm(
                     'Delete the saved session entirely and force a fresh QR scan?')">
               <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--accent"
@@ -360,7 +363,7 @@ def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
           var pollTimer = null;
 
           function pollNow() {{
-            fetch("/session/status.json")
+            fetch("{p("/session/status.json")}")
               .then(function (r) {{ return r.json(); }})
               .then(function (s) {{
                 if (s.logged_in) {{ window.location.reload(); return; }}
@@ -398,10 +401,10 @@ def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
           scheduleNext();
         </script>"""
     else:
-        body = """
+        body = f"""
         <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:420px;padding:24px;">
           <p><span class="status-dot disconnected"></span>Not connected</p>
-          <form method="post" action="/session/connect">
+          <form method="post" action="{p("/session/connect")}">
             <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
                     type="submit">
               Connect WhatsApp
@@ -412,7 +415,7 @@ def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
 
 
 def not_connected_page(bridge_name: str = "") -> str:
-    body = """
+    body = f"""
     <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:480px;padding:24px;">
       <p><span class="status-dot disconnected"></span>WhatsApp isn't connected</p>
       <p class="tab-note">
@@ -420,7 +423,7 @@ def not_connected_page(bridge_name: str = "") -> str:
         which can be stale or gone — log in first so what you allow here is
         actually current.
       </p>
-      <a class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored" href="/">
+      <a class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored" href="{p("/")}">
         Go to Session
       </a>
     </div>"""
@@ -1121,10 +1124,10 @@ def _user_row(user: dict[str, Any], current: str) -> str:
     else:
         controls = f"""
       <td>
-        <form method="post" action="/users/{href}/role">{_role_select(role)}</form>
+        <form method="post" action="{p("/users")}/{href}/role">{_role_select(role)}</form>
       </td>
       <td>
-        <form method="post" action="/users/{href}/remove"
+        <form method="post" action="{p("/users")}/{href}/remove"
               onsubmit="return confirm('Remove this user? They lose all access.');">
           <button class="mdl-button mdl-js-button mdl-button--icon" type="submit" title="Remove">
             <i class="material-icons">delete</i>
@@ -1167,7 +1170,7 @@ def users_page(
       set per account, not here.
     </p>
     <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:560px;padding:24px;">
-      <form method="post" action="/users/invite"
+      <form method="post" action="{p("/users/invite")}"
             style="display:flex;gap:12px;align-items:flex-end;">
         <div class="mdl-textfield mdl-js-textfield" style="flex:1;">
           <input class="mdl-textfield__input" type="email" name="email" id="new-email" required>
@@ -1198,13 +1201,13 @@ _CARD_STYLE = "width:100%;max-width:560px;padding:16px 24px;margin-bottom:16px;"
 def _grant_row(account_id: str, email: str) -> str:
     aid = html.escape(quote(account_id, safe=""), quote=True)
     choose_chats = _select_account_form(
-        account_id, label="Choose chats", next_url=f"/chats?viewer={quote(email, safe='@')}"
+        account_id, label="Choose chats", next_url=p(f"/chats?viewer={quote(email, safe='@')}")
     )
     return f"""
       <li style="display:flex;align-items:center;gap:8px;">
         <span>{html.escape(email)}</span>
         {choose_chats}
-        <form method="post" action="/accounts/{aid}/revoke"
+        <form method="post" action="{p("/accounts")}/{aid}/revoke"
               onsubmit="return confirm('Revoke access? They stop seeing this account at once.');">
           <input type="hidden" name="email" value="{html.escape(email, quote=True)}">
           <button class="mdl-button mdl-js-button mdl-button--icon" type="submit" title="Revoke">
@@ -1230,7 +1233,7 @@ def _account_card(row: dict[str, Any], current: str) -> str:
     )
     grant_form = (
         f"""
-      <form method="post" action="/accounts/{aid}/grant" style="display:flex;gap:8px;">
+      <form method="post" action="{p("/accounts")}/{aid}/grant" style="display:flex;gap:8px;">
         <select name="email" required>{options}</select>
         <button class="mdl-button mdl-js-button mdl-button--raised" type="submit">Share</button>
       </form>"""
@@ -1246,15 +1249,15 @@ def _account_card(row: dict[str, Any], current: str) -> str:
                 else "<b>differs from intended</b>: " + html.escape(row["key_drift"])
             )
             buttons = f"""
-        <form method="post" action="/accounts/{aid}/key/verify" style="display:inline;">
+        <form method="post" action="{p("/accounts")}/{aid}/key/verify" style="display:inline;">
           <button class="mdl-button mdl-js-button" type="submit">Verify</button></form>
-        <form method="post" action="/accounts/{aid}/key/rotate" style="display:inline;"
+        <form method="post" action="{p("/accounts")}/{aid}/key/rotate" style="display:inline;"
               onsubmit="return confirm('Replace this account\'s access key?');">
           <button class="mdl-button mdl-js-button" type="submit">Rotate</button></form>"""
         elif row.get("can_store_key"):
             state_text = "none: the MCP server is using the shared admin key for this account"
             buttons = f"""
-        <form method="post" action="/accounts/{aid}/key/create" style="display:inline;">
+        <form method="post" action="{p("/accounts")}/{aid}/key/create" style="display:inline;">
           <button class="mdl-button mdl-js-button mdl-button--raised" type="submit">
             Create access key</button></form>"""
         else:
@@ -1264,7 +1267,7 @@ def _account_card(row: dict[str, Any], current: str) -> str:
       <p class="tab-note">WAHA access key: {state_text}</p>{buttons}"""
     delete = (
         f"""
-      <form method="post" action="/accounts/{aid}/delete" style="margin-top:12px;"
+      <form method="post" action="{p("/accounts")}/{aid}/delete" style="margin-top:12px;"
             onsubmit="return confirm('Delete this account and its WhatsApp session?');">
         <button class="mdl-button mdl-js-button" type="submit">Delete account</button>
       </form>"""
@@ -1310,7 +1313,7 @@ def accounts_page(
         create = f"""
     <div class="mdl-card mdl-shadow--2dp" style="{_CARD_STYLE}">
       <b>New account</b>
-      <form method="post" action="/accounts/create"
+      <form method="post" action="{p("/accounts/create")}"
             style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
         <input class="mdl-textfield__input" style="width:140px" name="id"
                placeholder="id, e.g. sam" required>

@@ -39,6 +39,7 @@ from starlette.routing import Route
 
 import botsapp.state as state
 from botsapp.admin import accounts, auth, templates, users
+from botsapp.admin.prefix import p
 from botsapp.bridge_factory import bridge_provider_name, build_registry
 from botsapp.db import DatabaseManager
 from botsapp.key_manager import KeyManager, make_probe
@@ -237,7 +238,7 @@ async def session_connect(request: Request) -> Response:
     deliberate user action (button click), not an automatic side effect of
     viewing or polling the session page."""
     await connect_or_get_status(await _bridge(request))
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=p("/"), status_code=303)
 
 
 async def session_disconnect(request: Request) -> Response:
@@ -245,7 +246,7 @@ async def session_disconnect(request: Request) -> Response:
     STOPPED state so the user can immediately hit Connect WhatsApp and
     re-pair with a fresh QR."""
     await (await _bridge(request)).disconnect()
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=p("/"), status_code=303)
 
 
 async def session_delete(request: Request) -> Response:
@@ -257,7 +258,7 @@ async def session_delete(request: Request) -> Response:
         await (await _bridge(request)).delete_session()
     except Exception as exc:
         logger.warning("session delete failed: %s", exc)
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=p("/"), status_code=303)
 
 
 async def chats_index(request: Request) -> Response:
@@ -468,7 +469,7 @@ def _redirect_to_tab(jid: str, viewer: str = "") -> RedirectResponse:
     panel_class = "community" if jid in _community_jids else _classify(jid)
     panel = _PANEL_BY_CLASS[panel_class]
     query = f"?{urlencode({'viewer': viewer})}" if viewer else ""
-    return RedirectResponse(url=f"/chats{query}#{panel}", status_code=303)
+    return RedirectResponse(url=f"{p('/chats')}{query}#{panel}", status_code=303)
 
 
 async def toggle_allowed(request: Request) -> Response:
@@ -511,33 +512,33 @@ async def save_metadata(request: Request) -> Response:
 
 async def access_redirect(_request: Request) -> Response:
     """The old Access tab lives on as /users (docs/decisions/0026)."""
-    return RedirectResponse(url="/users", status_code=308)
+    return RedirectResponse(url=p("/users"), status_code=308)
 
 
 app = Starlette(
     routes=[
-        Route("/", session_index),
-        Route("/session/status.json", session_status_json),
-        Route("/session/connect", session_connect, methods=["POST"]),
-        Route("/session/disconnect", session_disconnect, methods=["POST"]),
-        Route("/session/delete", session_delete, methods=["POST"]),
-        Route("/chats", chats_index),
-        Route("/chats/{jid}/allow", toggle_allowed, methods=["POST"]),
-        Route("/chats/{jid}/metadata", save_metadata, methods=["POST"]),
-        Route("/users", users.users_index),
-        Route("/users/invite", users.invite_user, methods=["POST"]),
-        Route("/users/{email}/role", users.change_role, methods=["POST"]),
-        Route("/users/{email}/remove", users.remove_user, methods=["POST"]),
-        Route("/access", access_redirect),
-        Route("/accounts", accounts.accounts_index),
-        Route("/accounts/create", accounts.create_account, methods=["POST"]),
-        Route("/accounts/{account_id}/select", accounts.select_account, methods=["POST"]),
-        Route("/accounts/{account_id}/grant", accounts.grant_account, methods=["POST"]),
-        Route("/accounts/{account_id}/revoke", accounts.revoke_account, methods=["POST"]),
-        Route("/accounts/{account_id}/delete", accounts.delete_account, methods=["POST"]),
-        Route("/accounts/{account_id}/key/create", accounts.key_create, methods=["POST"]),
-        Route("/accounts/{account_id}/key/rotate", accounts.key_rotate, methods=["POST"]),
-        Route("/accounts/{account_id}/key/verify", accounts.key_verify, methods=["POST"]),
+        Route(p("/"), session_index),
+        Route(p("/session/status.json"), session_status_json),
+        Route(p("/session/connect"), session_connect, methods=["POST"]),
+        Route(p("/session/disconnect"), session_disconnect, methods=["POST"]),
+        Route(p("/session/delete"), session_delete, methods=["POST"]),
+        Route(p("/chats"), chats_index),
+        Route(p("/chats/{jid}/allow"), toggle_allowed, methods=["POST"]),
+        Route(p("/chats/{jid}/metadata"), save_metadata, methods=["POST"]),
+        Route(p("/users"), users.users_index),
+        Route(p("/users/invite"), users.invite_user, methods=["POST"]),
+        Route(p("/users/{email}/role"), users.change_role, methods=["POST"]),
+        Route(p("/users/{email}/remove"), users.remove_user, methods=["POST"]),
+        Route(p("/access"), access_redirect),
+        Route(p("/accounts"), accounts.accounts_index),
+        Route(p("/accounts/create"), accounts.create_account, methods=["POST"]),
+        Route(p("/accounts/{account_id}/select"), accounts.select_account, methods=["POST"]),
+        Route(p("/accounts/{account_id}/grant"), accounts.grant_account, methods=["POST"]),
+        Route(p("/accounts/{account_id}/revoke"), accounts.revoke_account, methods=["POST"]),
+        Route(p("/accounts/{account_id}/delete"), accounts.delete_account, methods=["POST"]),
+        Route(p("/accounts/{account_id}/key/create"), accounts.key_create, methods=["POST"]),
+        Route(p("/accounts/{account_id}/key/rotate"), accounts.key_rotate, methods=["POST"]),
+        Route(p("/accounts/{account_id}/key/verify"), accounts.key_verify, methods=["POST"]),
         *auth.routes,
     ],
     middleware=[Middleware(auth.AuthMiddleware)],

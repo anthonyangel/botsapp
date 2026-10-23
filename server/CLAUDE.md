@@ -7,20 +7,28 @@ project-level architecture and the decision log this all implements.
 
 ## Entry points
 
-One image (`Dockerfile`), two `command:` overrides (Compose today, two
-processes inside one Fly Machine once deployed via `server/start.sh` — see
-[0013](../docs/decisions/0013-single-fly-app-shared-volume.md)):
+One image (`Dockerfile`), two `command:` overrides for local dev (Compose,
+each on its own port, no proxy, no prefix) vs. three processes on Fly via
+`server/start.sh` ([0013](../docs/decisions/0013-single-fly-app-shared-volume.md),
+[0028](../docs/decisions/0028-caddy-fronted-admin-ui-public-prefix.md)):
+Caddy (`server/Caddyfile`) is the only thing Fly's public port reaches,
+forwarding `/admin/*` to admin-ui and everything else to mcp-server, which on
+Fly binds loopback-only instead of the public interface.
 
-- `botsapp.main:app` — the MCP server, port 8000. FastMCP instance lives in
-  `app.py` (kept separate from `main.py` so `tools.py` can import it without
-  a circular dependency); tools live in `tools.py`.
+- `botsapp.main:app` — the MCP server, port 8000 locally (8001, loopback-only,
+  behind Caddy on Fly). FastMCP instance lives in `app.py` (kept separate from
+  `main.py` so `tools.py` can import it without a circular dependency); tools
+  live in `tools.py`.
 - `botsapp.admin_main:app` — the admin UI, port 8100. Starlette app in
   `admin/app.py`, login + route policy in `admin/auth.py` (AuthKit via an
   `AuthKitClient` protocol, signed-cookie session, per-request role lookup,
   Origin check for CSRF), `admin/users.py` and `admin/accounts.py` (Users and
   Accounts pages), hand-rolled f-string templates in `admin/templates.py`
   (no Jinja2 — the UI is a handful of pages, not enough surface to justify
-  the dependency).
+  the dependency). `admin/prefix.py` holds `ADMIN_URL_PREFIX` (unset locally;
+  `/admin` on Fly, behind Caddy) — every route, redirect, href and form
+  action in the package goes through its `p()` helper, since Caddy forwards
+  the path unstripped and nothing here uses Starlette's `url_for`.
 
 ## Module map
 
