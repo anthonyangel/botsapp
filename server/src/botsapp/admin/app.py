@@ -19,7 +19,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
@@ -30,7 +30,6 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import (
     HTMLResponse,
-    JSONResponse,
     PlainTextResponse,
     RedirectResponse,
     Response,
@@ -45,7 +44,7 @@ from botsapp.db import DatabaseManager
 from botsapp.key_manager import KeyManager, make_probe
 from botsapp.scope import ScopedChatDb
 from botsapp.secretbox import SecretBox
-from botsapp.session import connect_or_get_status, get_status
+from botsapp.session import get_status
 from botsapp.waha_client import WAHAClient
 from botsapp.waha_keys import WahaKeyApi
 
@@ -209,56 +208,6 @@ async def _chat_access(request: Request) -> _ChatAccess | Response:
         is_owner=is_owner,
         chat_db=_chat_db(request, viewer),
     )
-
-
-async def _poll_status(request: Request) -> dict[str, Any]:
-    """Status only — never triggers a connect. Calling the bridge's connect
-    on every page view/poll was the actual bug behind "QR linking isn't
-    working": each reload issued a fresh QR and killed the bridge's channel
-    for whichever QR was already mid-scan. get_status() is safe to call as
-    often as we like; connect_or_get_status() (which does call connect) is
-    reserved for the explicit "Connect WhatsApp" button below."""
-    return asdict(await get_status(await _bridge(request)))
-
-
-async def session_index(request: Request) -> Response:
-    status = await _poll_status(request)
-    return HTMLResponse(templates.session_page(status, bridge_provider_name()))
-
-
-async def session_status_json(request: Request) -> Response:
-    """Polled by the QR-waiting page client-side (see templates.session_page)
-    to refresh the QR/connected state in place, without reloading / and
-    without ever re-triggering connect."""
-    return JSONResponse(await _poll_status(request))
-
-
-async def session_connect(request: Request) -> Response:
-    """The only route that actually calls the bridge's connect — a
-    deliberate user action (button click), not an automatic side effect of
-    viewing or polling the session page."""
-    await connect_or_get_status(await _bridge(request))
-    return RedirectResponse(url=p("/"), status_code=303)
-
-
-async def session_disconnect(request: Request) -> Response:
-    """Log out of WhatsApp (WAHA logout endpoint). Leaves the session in
-    STOPPED state so the user can immediately hit Connect WhatsApp and
-    re-pair with a fresh QR."""
-    await (await _bridge(request)).disconnect()
-    return RedirectResponse(url=p("/"), status_code=303)
-
-
-async def session_delete(request: Request) -> Response:
-    """Nuclear option: delete the WAHA session entirely (removes all
-    persisted auth material). Use this when logout alone isn't enough to
-    escape a stuck WORKING state. After deletion, Connect WhatsApp will
-    create a fresh session and show a new QR code."""
-    try:
-        await (await _bridge(request)).delete_session()
-    except Exception as exc:
-        logger.warning("session delete failed: %s", exc)
-    return RedirectResponse(url=p("/"), status_code=303)
 
 
 async def chats_index(request: Request) -> Response:
@@ -526,11 +475,7 @@ async def access_redirect(_request: Request) -> Response:
 
 app = Starlette(
     routes=[
-        Route(p("/"), session_index),
-        Route(p("/session/status.json"), session_status_json),
-        Route(p("/session/connect"), session_connect, methods=["POST"]),
-        Route(p("/session/disconnect"), session_disconnect, methods=["POST"]),
-        Route(p("/session/delete"), session_delete, methods=["POST"]),
+        Route(p("/"), accounts.session_index),
         Route(p("/chats"), chats_index),
         Route(p("/chats/{jid}/allow"), toggle_allowed, methods=["POST"]),
         Route(p("/chats/{jid}/metadata"), save_metadata, methods=["POST"]),
@@ -539,7 +484,7 @@ app = Starlette(
         Route(p("/users/{email}/role"), users.change_role, methods=["POST"]),
         Route(p("/users/{email}/remove"), users.remove_user, methods=["POST"]),
         Route(p("/access"), access_redirect),
-        Route(p("/accounts"), accounts.accounts_index),
+        Route(p("/accounts"), accounts.accounts_redirect),
         Route(p("/accounts/create"), accounts.create_account, methods=["POST"]),
         Route(p("/accounts/{account_id}/select"), accounts.select_account, methods=["POST"]),
         Route(p("/accounts/{account_id}/grant"), accounts.grant_account, methods=["POST"]),
@@ -548,6 +493,22 @@ app = Starlette(
         Route(p("/accounts/{account_id}/key/create"), accounts.key_create, methods=["POST"]),
         Route(p("/accounts/{account_id}/key/rotate"), accounts.key_rotate, methods=["POST"]),
         Route(p("/accounts/{account_id}/key/verify"), accounts.key_verify, methods=["POST"]),
+        Route(p("/accounts/{account_id}/session/status.json"), accounts.session_status_json),
+        Route(
+            p("/accounts/{account_id}/session/connect"),
+            accounts.session_connect,
+            methods=["POST"],
+        ),
+        Route(
+            p("/accounts/{account_id}/session/disconnect"),
+            accounts.session_disconnect,
+            methods=["POST"],
+        ),
+        Route(
+            p("/accounts/{account_id}/session/reset"),
+            accounts.session_reset,
+            methods=["POST"],
+        ),
         *auth.routes,
     ],
     middleware=[Middleware(auth.AuthMiddleware)],

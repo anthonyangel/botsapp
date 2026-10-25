@@ -36,8 +36,8 @@ assert cfg.redirect_uri == "https://x.test/admin/auth/callback", cfg.redirect_ur
 assert auth._policy("/admin/users") == "admin"
 assert auth._policy("/admin/accounts/create") == "admin"
 assert auth._policy("/admin/accounts") == "user"
-assert auth._policy("/admin/") == "owner"
-assert auth._policy("/admin") == "owner"  # the mount root itself, no trailing slash
+assert auth._policy("/admin/") == "user"
+assert auth._policy("/admin") == "user"  # the mount root itself, no trailing slash
 
 form = templates._select_account_form("sam", label="Use this account")
 assert 'action="/admin/accounts/sam/select"' in form, form

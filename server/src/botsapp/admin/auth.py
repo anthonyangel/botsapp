@@ -17,16 +17,21 @@ Route policy (``_policy``):
 
 * ``/users`` (and legacy ``/access``)           — admins only
 * ``/accounts/create``, ``/accounts/*/delete``, ``/accounts/*/key/*`` — admins only
-* ``/accounts*`` (list, grant, revoke, select) — any user; handlers check that
-  the account in the path is theirs (owner) or that they are an admin
-* ``/`` and ``/session/*``         — the selected account's owner, or an admin
+* ``/`` (and legacy ``/accounts``), plus the rest of ``/accounts*`` (grant,
+  revoke, select, session/*) — any user; handlers check that the account in
+  the path is theirs (owner) or that they are an admin (``_manageable``) for
+  anything that mutates it. ``/`` lists every account the caller owns or was
+  granted, each with its own live pairing controls inline (0029: this used
+  to be a separate, single-selected-account "Session" page requiring
+  ownership of *that* account just to view it — merged here since the
+  per-account ownership check already lived in each mutating handler, not
+  in the page-level policy).
 * ``/chats*``                      — anyone holding the selected account
 * ``/login``, ``/auth/callback``, ``/logout`` — public
 
-Which account the session/chats pages act on is the ``botsapp_account`` cookie
-(set by ``/accounts/<id>/select``), validated on every request against what the
-user may select: their own and granted accounts, plus every account for an admin
-(who can then pair or reset a session but, holding no grant, sees no chats).
+Which account the Chats page acts on is the ``botsapp_account`` cookie (set by
+``/accounts/<id>/select``), validated on every request against what the user
+may select: their own and granted accounts, plus every account for an admin.
 
 CSRF: the session cookie is ``SameSite=Lax`` and every state-changing request
 must carry an ``Origin`` (or ``Referer``) matching this host. The hand-rolled
@@ -268,10 +273,8 @@ def _policy(path: str) -> str:
         return "admin"
     if path.startswith("/accounts/") and "/key/" in path:
         return "admin"
-    if path.startswith("/accounts"):
+    if path == "/" or path.startswith("/accounts"):
         return "user"  # the handlers check ownership of the account in the path
-    if path == "/" or path.startswith("/session"):
-        return "owner"
     return "member"
 
 
@@ -322,19 +325,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         mine = await state.db.list_accounts_for_user(email)
         selectable = await state.db.list_accounts() if user["is_admin"] else mine
         account_id = _resolve_account(request, email, mine, selectable)
-        chosen = next((a for a in selectable if a["id"] == account_id), None)
-        can_manage_session = chosen is not None and (
-            bool(user["is_admin"]) or chosen["owner_email"] == email
-        )
-        if policy == "owner" and not can_manage_session:
-            if request.url.path == p("/") and request.method == "GET":
-                # The landing page is the Session page; for someone who only has
-                # a shared account, send them somewhere they can act.
-                return RedirectResponse(url=p("/accounts"), status_code=303)
-            if chosen is None:
-                return _denied(403, "You don't have a WhatsApp account yet.")
-            return _denied(403, "Only the account's owner can manage its session.")
-        elif policy == "member" and account_id not in {a["id"] for a in mine}:
+        if policy == "member" and account_id not in {a["id"] for a in mine}:
             return _denied(403, "You don't have access to a WhatsApp account.")
 
         request.state.user = user
@@ -345,7 +336,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 is_admin=bool(user["is_admin"]),
                 accounts=tuple((a["id"], a["label"] or a["id"]) for a in selectable),
                 account=account_id or "",
-                can_manage_session=can_manage_session,
             )
         )
         try:

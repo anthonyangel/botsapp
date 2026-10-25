@@ -94,6 +94,9 @@ def client(monkeypatch, stub):
             side_effect=lambda e: [primary] if e in holders else []
         )
 
+        assert state.registry is not None
+        state.registry.for_account = AsyncMock(return_value=state.bridge)
+
         async def _bridge(_request):
             return state.bridge
 
@@ -236,13 +239,21 @@ def test_access_page_is_admin_only(client):
 
 
 def test_session_pages_are_owner_or_admin_only(client):
+    # Session actions go through the same _manageable() check as
+    # grant/revoke/delete/key (0029) — a redirect with an "Unknown
+    # account." flash either way, not a 403, so a non-owner can't tell a
+    # real account they don't own from one that doesn't exist.
     _sign_in(client, GUEST)  # holds the account but doesn't own it
-    assert client.post("/session/disconnect", headers=_same_origin()).status_code == 403
-    assert client.post("/session/delete", headers=_same_origin()).status_code == 403
+    r = client.post("/accounts/default/session/disconnect", headers=_same_origin())
+    assert r.status_code == 303 and "error=Unknown" in r.headers["location"]
+    r = client.post("/accounts/default/session/reset", headers=_same_origin())
+    assert r.status_code == 303 and "error=Unknown" in r.headers["location"]
     _sign_in(client, OWNER)
-    assert client.post("/session/disconnect", headers=_same_origin()).status_code == 303
+    r = client.post("/accounts/default/session/disconnect", headers=_same_origin())
+    assert r.status_code == 303 and "error=" not in r.headers["location"]
     _sign_in(client, ADMIN)
-    assert client.post("/session/disconnect", headers=_same_origin()).status_code == 303
+    r = client.post("/accounts/default/session/disconnect", headers=_same_origin())
+    assert r.status_code == 303 and "error=" not in r.headers["location"]
 
 
 def test_chat_pages_need_access_to_the_account(client):

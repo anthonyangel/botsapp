@@ -37,7 +37,11 @@ def client(monkeypatch, tmp_path) -> Iterator[TestClient]:
     monkeypatch.setenv("WAHA_API_KEY", "fake-key")
     cfg = auth.AdminAuthConfig(client=None, secret=b"s" * 32, base_url=BASE)
     monkeypatch.setattr(auth, "config_from_env", lambda: cfg)
-    monkeypatch.setattr(accounts_module, "_session_label", AsyncMock(return_value="connected"))
+    monkeypatch.setattr(
+        accounts_module,
+        "_account_status",
+        AsyncMock(return_value=SessionStatus(connected=True, logged_in=True)),
+    )
     with TestClient(admin_app.app, base_url=BASE, follow_redirects=False) as c:
         c.cfg = cfg
         # The registry would talk to WAHA; record instead.
@@ -250,25 +254,25 @@ async def test_member_sees_only_their_own_and_shared_accounts(client, people):
     await state.db.add_account("her", HER, "acct-her", label="Her phone")
     await state.db.grant_account("sam", HER)
     _as(client, SAM)
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert "Sam&#x27;s phone" in page and "Her phone" not in page
     assert "New account" not in page  # creating is admin-only
     _as(client, HER)
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert "Her phone" in page and "shared by sam@example.com" in page
 
 
 async def test_admin_sees_every_account_and_the_create_form(client, people):
     await state.db.add_account("sam", SAM, "acct-sam", label="Sam's phone")
     _as(client, ADMIN)
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert "Sam&#x27;s phone" in page and "New account" in page and "connected" in page
 
 
 async def test_labels_and_emails_are_escaped(client, people):
     await state.db.add_account("sam", SAM, "acct-sam", label="<script>alert(1)</script>")
     _as(client, ADMIN)
-    assert "<script>alert" not in client.get("/accounts").text
+    assert "<script>alert" not in client.get("/").text
 
 
 # ── selecting an account ─────────────────────────────────────────────────────
@@ -290,15 +294,15 @@ async def test_select_sets_a_validated_cookie_and_drives_the_pages(client, peopl
 
     monkeypatch.setattr(admin_app, "_bridge", fake_bridge)
     _as(client, HER)
-    client.get("/session/status.json")
+    client.get("/chats")
     assert seen[-1] == "her"  # owned beats the shared default
     r = client.post(
         "/accounts/her2/select",
-        headers={"origin": BASE, "referer": f"{BASE}/session/status.json"},
+        headers={"origin": BASE, "referer": f"{BASE}/chats"},
     )
-    assert r.status_code == 303 and r.headers["location"] == "/session/status.json"
+    assert r.status_code == 303 and r.headers["location"] == "/chats"
     assert "HttpOnly" in r.headers["set-cookie"]
-    client.get("/session/status.json")
+    client.get("/chats")
     assert seen[-1] == "her2"
 
 
@@ -345,9 +349,10 @@ async def test_admin_can_reset_any_session_but_sees_no_chats_without_a_grant(cli
     await state.db.add_account("sam", SAM, "acct-sam")
     _as(client, ADMIN)
     client.cookies.set(auth.ACCOUNT_COOKIE, "sam")
-    # The session pages are open to an admin for any account...
+    # Session actions are per-account-in-the-path now, open to an admin for
+    # any account regardless of the selected-account cookie...
     state.registry.for_account = AsyncMock(return_value=SimpleNamespace(disconnect=AsyncMock()))
-    assert _post(client, "/session/disconnect").status_code == 303
+    assert _post(client, "/accounts/sam/session/disconnect").status_code == 303
     # ...but the chats pages need a real grant, which an admin doesn't have.
     assert client.get("/chats").status_code == 403
 
@@ -357,14 +362,14 @@ async def test_switcher_appears_only_with_several_accounts_and_admin_links_only_
 ):
     await state.db.add_account("her", HER, "acct-her", label="Her phone")
     _as(client, HER)
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert 'aria-label="Account"' not in page  # she has one account
     assert 'href="/users"' not in page  # not an admin
     await state.db.grant_account("default", HER)
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert 'aria-label="Account"' in page and "Her phone" in page
     _as(client, ADMIN)
-    assert 'href="/users"' in client.get("/accounts").text
+    assert 'href="/users"' in client.get("/").text
 
 
 # ── scoped WAHA keys on the Accounts page (0027) ─────────────────────────────
@@ -419,11 +424,11 @@ async def test_a_failed_key_delete_keeps_the_account_and_its_session(client, peo
 
 async def test_an_existing_account_without_a_key_can_be_given_one(client, people):
     _as(client, ADMIN)
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert "using the shared admin key" in page and "Create access key" in page
     assert "notice" in _flash(_post(client, "/accounts/default/key/create"))
     assert await state.db.get_account_key("default") is not None
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert "read-only, as intended" in page and "Rotate" in page and "Verify" in page
 
 
@@ -447,7 +452,7 @@ async def test_verify_shows_a_scope_edited_in_wahas_dashboard(client, people):
         key_id, info.session, False, True, {**info.actions, "send": True}
     )
     assert "differs" in _flash(_post(client, "/accounts/default/key/verify"))["error"][0]
-    assert "differs from intended" in client.get("/accounts").text
+    assert "differs from intended" in client.get("/").text
 
 
 async def test_creating_a_second_key_is_refused(client, people):
@@ -459,7 +464,7 @@ async def test_creating_a_second_key_is_refused(client, people):
 async def test_key_controls_are_admin_only_and_hidden_from_owners(client, people):
     await state.db.add_account("sam", SAM, "acct-sam")
     _as(client, SAM)
-    assert "/key/" not in client.get("/accounts").text
+    assert "/key/" not in client.get("/").text
     for action in ("create", "rotate", "verify"):
         assert _post(client, f"/accounts/sam/key/{action}").status_code == 403
     assert await state.db.get_account_key("sam") is None

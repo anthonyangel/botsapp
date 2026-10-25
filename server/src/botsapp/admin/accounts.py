@@ -1,13 +1,17 @@
 """
-Admin Accounts page (docs/decisions/0025, 0026, #50): WhatsApp accounts, who
-may use them, and which one the other pages act on.
+Admin Session/Accounts page (docs/decisions/0025, 0026, 0029, #50): WhatsApp
+accounts, who may use them, and live pairing for each.
 
-* Admins create and delete accounts (and so their WAHA sessions) and see every
-  account's session status.
+* Admins create and delete accounts (and so their WAHA sessions); every
+  account's owner, or an admin, sees and drives its live pairing state
+  (Connect/QR/Disconnect/Force re-pair) right on its own card — no separate
+  "select an account, then go to a Session page" step (0029: Session and
+  Accounts were two pages with the same "whose WhatsApp is this and is it
+  connected" content; merged into one).
 * An account's owner — or an admin — grants it to, and revokes it from, existing
   users. Revoking also removes everything that viewer had been shown.
-* Anyone can select, from the accounts available to them, the one the Session
-  and Chats pages act on.
+* Anyone can select, from the accounts available to them, the one the Chats
+  page acts on (the only page left that needs a single "selected account").
 
 Ordering, so a failure leaves nothing half-made:
 
@@ -15,8 +19,8 @@ Ordering, so a failure leaves nothing half-made:
   the WAHA session; if WAHA fails the row is removed again.
 * delete — the WAHA session first (a missing session is fine), then the row with
   its grants and chat access; if WAHA fails nothing changes, and if the row delete
-  fails retrying is safe. The ``default`` account can't be deleted: the Session and
-  Chats pages fall back to it.
+  fails retrying is safe. The ``default`` account can't be deleted: the Chats
+  page falls back to it.
 """
 
 from __future__ import annotations
@@ -24,23 +28,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import asdict
 from typing import Any
 from urllib.parse import urlparse
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import botsapp.state as state
 from botsapp.admin import auth, templates
 from botsapp.admin.prefix import p
 from botsapp.admin.users import _back, _form_text, live_admin_check
+from botsapp.bridge import SessionStatus
 from botsapp.bridge_registry import session_name_for
 from botsapp.key_manager import KeyManagerError, describe_drift, drift_from_policy
+from botsapp.session import connect_or_get_status, get_status
+from botsapp.waha_client import WAHAClient
 
 logger = logging.getLogger(__name__)
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$")
-_BACK = p("/accounts")
+_BACK = p("/")
 
 
 def _err(text: str) -> RedirectResponse:
@@ -51,23 +59,26 @@ def _ok(text: str) -> RedirectResponse:
     return _back("notice", text, _BACK)
 
 
-async def _session_label(account_id: str) -> str:
-    """Short human status of an account's WAHA session; never raises."""
+async def accounts_redirect(_request: Request) -> Response:
+    """The old standalone Accounts page lives on as / (0029)."""
+    return RedirectResponse(url=p("/"), status_code=308)
+
+
+async def _bridge_for(account_id: str) -> WAHAClient:
     assert state.registry is not None
+    return await state.registry.for_account(account_id, purpose="admin")
+
+
+async def _account_status(account_id: str) -> SessionStatus:
+    """Live pairing status for one account's card; never raises."""
     try:
-        client = await state.registry.for_account(account_id, purpose="admin")
-        status = await client.get_session_status()
+        return await get_status(await _bridge_for(account_id))
     except Exception as exc:
         logger.warning("session status for %s unavailable: %s", account_id, exc)
-        return "unreachable"
-    if status.errors:
-        return "unreachable"
-    if status.logged_in:
-        return "connected"
-    return "waiting for QR scan" if status.qr_code else "not connected"
+        return SessionStatus(errors=[str(exc)])
 
 
-async def accounts_index(request: Request) -> Response:
+async def session_index(request: Request) -> Response:
     assert state.db is not None
     user = request.state.user
     email, is_admin = user["email"], bool(user["is_admin"])
@@ -77,7 +88,7 @@ async def accounts_index(request: Request) -> Response:
     shared = [a for a in every if a["id"] in mine and a["owner_email"] != email]
     users = [u["email"] for u in await state.db.list_users()]
 
-    statuses = await asyncio.gather(*(_session_label(a["id"]) for a in manageable))
+    statuses = await asyncio.gather(*(_account_status(a["id"]) for a in manageable))
     rows: list[dict[str, Any]] = []
     for account, status in zip(manageable, statuses, strict=True):
         granted = await state.db.list_grants(account["id"])
@@ -86,7 +97,7 @@ async def accounts_index(request: Request) -> Response:
                 "id": account["id"],
                 "label": account["label"] or account["id"],
                 "owner": account["owner_email"],
-                "status": status,
+                "session": asdict(status),
                 "granted": granted,
                 "grantable": [u for u in users if u != account["owner_email"] and u not in granted],
                 "deletable": is_admin and account["id"] != auth.DEFAULT_ACCOUNT_ID,
@@ -101,7 +112,7 @@ async def accounts_index(request: Request) -> Response:
             }
         )
     return HTMLResponse(
-        templates.accounts_page(
+        templates.session_page(
             rows,
             shared=[(a["id"], a["label"] or a["id"], a["owner_email"]) for a in shared],
             users=users,
@@ -111,6 +122,58 @@ async def accounts_index(request: Request) -> Response:
             error=request.query_params.get("error", ""),
         )
     )
+
+
+async def session_connect(request: Request) -> Response:
+    """The only route that actually calls the bridge's connect — a deliberate
+    user action (button click), not an automatic side effect of viewing or
+    polling the account's card."""
+    account = await _manageable(request)
+    if isinstance(account, Response):
+        return account
+    await connect_or_get_status(await _bridge_for(account["id"]))
+    return RedirectResponse(url=_BACK, status_code=303)
+
+
+async def session_disconnect(request: Request) -> Response:
+    """Log out of WhatsApp (WAHA logout endpoint). Leaves the session in
+    STOPPED state so the owner can immediately hit Connect WhatsApp and
+    re-pair with a fresh QR."""
+    account = await _manageable(request)
+    if isinstance(account, Response):
+        return account
+    await (await _bridge_for(account["id"])).disconnect()
+    return RedirectResponse(url=_BACK, status_code=303)
+
+
+async def session_reset(request: Request) -> Response:
+    """Nuclear option: delete the WAHA session entirely (removes all
+    persisted auth material). Use this when logout alone isn't enough to
+    escape a stuck WORKING state. After deletion, Connect WhatsApp will
+    create a fresh session and show a new QR code.
+
+    Named ``reset``, not ``delete`` — ``/accounts/{id}/session/delete``
+    would otherwise end in ``/delete`` and collide with _policy's
+    admin-only "delete the whole account" pattern, which matches any path
+    ending that way."""
+    account = await _manageable(request)
+    if isinstance(account, Response):
+        return account
+    try:
+        await (await _bridge_for(account["id"])).delete_session()
+    except Exception as exc:
+        logger.warning("session reset failed for %s: %s", account["id"], exc)
+    return RedirectResponse(url=_BACK, status_code=303)
+
+
+async def session_status_json(request: Request) -> Response:
+    """Polled by a card's QR-waiting panel client-side (see
+    templates._pairing_panel) to refresh the QR/connected state in place,
+    without reloading / and without ever re-triggering connect."""
+    account = await _manageable(request)
+    if isinstance(account, Response):
+        return account
+    return JSONResponse(asdict(await _account_status(account["id"])))
 
 
 async def create_account(request: Request) -> Response:
@@ -227,7 +290,7 @@ async def revoke_account(request: Request) -> Response:
 
 
 async def select_account(request: Request) -> Response:
-    """Set which account the Session and Chats pages act on. The cookie is only
+    """Set which account the Chats page acts on. The cookie is only
     a preference: auth.py re-validates it against what the user may select on
     every request."""
     assert state.db is not None

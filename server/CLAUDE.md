@@ -22,8 +22,8 @@ Fly binds loopback-only instead of the public interface.
 - `botsapp.admin_main:app` — the admin UI, port 8100. Starlette app in
   `admin/app.py`, login + route policy in `admin/auth.py` (AuthKit via an
   `AuthKitClient` protocol, signed-cookie session, per-request role lookup,
-  Origin check for CSRF), `admin/users.py` and `admin/accounts.py` (Users and
-  Accounts pages), hand-rolled f-string templates in `admin/templates.py`
+  Origin check for CSRF), `admin/users.py` (Users page) and `admin/accounts.py` (the
+  merged Session/Accounts page, [0029](../docs/decisions/0029-session-and-accounts-pages-merged.md)), hand-rolled f-string templates in `admin/templates.py`
   (no Jinja2 — the UI is a handful of pages, not enough surface to justify
   the dependency). `admin/prefix.py` holds `ADMIN_URL_PREFIX` (unset locally;
   `/admin` on Fly, behind Caddy) — every route, redirect, href and form
@@ -70,7 +70,7 @@ Fly binds loopback-only instead of the public interface.
   `MessageStore`'s job. Shared file, WAL mode, read by both processes
   ([0007](../docs/decisions/0007-sqlite-for-metadata-store.md)).
 - `session.py` — WhatsApp session/QR pairing logic, called from both
-  `tools.whatsapp_session` and the admin UI's session page — kept in one
+  `tools.whatsapp_session` and the admin UI's per-account pairing controls — kept in one
   place so the two surfaces can't drift.
 - `tools.py` — the `@mcp.tool()`-decorated MCP tools. Every tool that
   mutates WhatsApp state is tagged `"outbound"`; `app.py` wires
