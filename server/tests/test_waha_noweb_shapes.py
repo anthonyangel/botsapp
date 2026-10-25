@@ -162,6 +162,13 @@ def test_noweb_protocol_only_messages_are_noise():
     assert not _is_real_message({"_data": {"message": {"senderKeyDistributionMessage": {}}}})
 
 
+def test_noweb_pin_events_are_noise():
+    pin = {"pinInChatMessage": {"key": {"id": "X"}, "type": 1}, "messageContextInfo": {}}
+    assert not _is_real_message({"_data": {"message": pin}})
+    # A pin event bundled with the sender-key envelope is still just plumbing.
+    assert not _is_real_message({"_data": {"message": {**pin, "senderKeyDistributionMessage": {}}}})
+
+
 def test_noweb_content_messages_are_real():
     assert _is_real_message(_noweb_message())
     assert _is_real_message({"_data": {"message": {"imageMessage": {}}}})
