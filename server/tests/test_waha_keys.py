@@ -7,6 +7,7 @@ import pytest
 
 from botsapp.waha_keys import (
     DEFAULT_ACTIONS,
+    WAHA_ACTIONS,
     KeyApiError,
     WahaKeyApi,
     effective_actions,
@@ -19,9 +20,10 @@ def test_null_actions_mean_wahas_defaults():
     assert DEFAULT_ACTIONS["delete"] is False and DEFAULT_ACTIONS["send"] is True
 
 
-def test_reported_actions_overlay_the_defaults():
-    got = effective_actions({"send": False})
-    assert got["send"] is False and got["read"] is True
+def test_a_partial_map_denies_what_it_omits():
+    got = effective_actions({"send": True})
+    assert got["send"] is True
+    assert not any(got[a] for a in WAHA_ACTIONS if a != "send")
 
 
 def test_unknown_actions_are_kept_but_logged(caplog):

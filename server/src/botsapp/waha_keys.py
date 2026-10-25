@@ -39,13 +39,20 @@ class KeyApiError(Exception):
 
 
 def effective_actions(raw: dict[str, Any] | None) -> dict[str, bool]:
-    """The actions a key really has: WAHA's defaults overlaid with what it reports.
+    """The actions a key really has, as WAHA enforces them.
+
+    ``None`` means WAHA's documented defaults. A reported map is taken as is: WAHA
+    denies every action a partial map omits (verified live, #47), so it is never
+    overlaid on the defaults. Names missing from a map are filled in as denied so
+    callers can index every action.
 
     A name outside ``WAHA_ACTIONS`` is kept (so drift against our policy shows it)
     but logged, so a scope WAHA adds later doesn't go unnoticed.
     """
-    actions = dict(DEFAULT_ACTIONS)
-    for name, allowed in (raw or {}).items():
+    if raw is None:
+        return dict(DEFAULT_ACTIONS)
+    actions = {name: False for name in WAHA_ACTIONS}
+    for name, allowed in raw.items():
         if name not in WAHA_ACTIONS:
             logger.warning("WAHA reports an action we don't know: %r", name)
         actions[name] = bool(allowed)
@@ -59,7 +66,8 @@ class KeyInfo:
     is_admin: bool
     is_active: bool
     actions: dict[str, bool]
-    # Present only on the response that creates the key; WAHA won't show it again.
+    # Set only on the response that creates the key. WAHA does list key values again
+    # in GET /api/keys, so this is not the only place the value can be read.
     secret: str | None = None
 
     def __repr__(self) -> str:  # never let the secret reach a log line

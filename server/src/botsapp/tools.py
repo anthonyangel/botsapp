@@ -775,7 +775,7 @@ async def get_group_info(jid: str, account: str | None = None) -> GroupDetail:
         raise _fail("get_group_info", exc) from exc
 
 
-@mcp.tool(tags={"write", "group", "dangerous", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "group", "dangerous", OUTBOUND_TAG})
 async def leave_group(group_jid: str, ctx: Context | None = None) -> dict[str, Any]:
     """Leave a WhatsApp group.
 
@@ -797,7 +797,7 @@ async def leave_group(group_jid: str, ctx: Context | None = None) -> dict[str, A
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "group", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "group", OUTBOUND_TAG})
 async def create_group(name: str, participants: list[str]) -> dict[str, Any]:
     """Create a new WhatsApp group.
 
@@ -816,7 +816,7 @@ async def create_group(name: str, participants: list[str]) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "group", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "group", OUTBOUND_TAG})
 async def update_group_participants(
     group_jid: str, action: str, phones: list[str]
 ) -> dict[str, Any]:
@@ -838,7 +838,7 @@ async def update_group_participants(
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "group", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "group", OUTBOUND_TAG})
 async def set_group_name(group_jid: str, name: str) -> dict[str, Any]:
     """Change the name of a WhatsApp group.
 
@@ -854,7 +854,7 @@ async def set_group_name(group_jid: str, name: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "group", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "group", OUTBOUND_TAG})
 async def set_group_topic(group_jid: str, topic: str) -> dict[str, Any]:
     """Change the topic/description of a WhatsApp group.
 
@@ -903,7 +903,7 @@ async def send_reaction(to: str, message_id: str, emoji: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def mark_read(to: str, message_ids: list[str]) -> dict[str, Any]:
     """Mark one or more messages as read.
 
@@ -919,7 +919,7 @@ async def mark_read(to: str, message_ids: list[str]) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def edit_message(to: str, message_id: str, text: str) -> dict[str, Any]:
     """Edit a previously sent WhatsApp message.
 
@@ -936,7 +936,7 @@ async def edit_message(to: str, message_id: str, text: str) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "chat", "dangerous", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", "dangerous", OUTBOUND_TAG})
 async def delete_message(to: str, message_id: str, ctx: Context | None = None) -> dict[str, Any]:
     """Delete a message you sent in a WhatsApp chat.
 
@@ -1019,7 +1019,7 @@ async def send_poll(group_jid: str, question: str, options: list[str]) -> dict[s
         return {"error": str(exc)}
 
 
-@mcp.tool(tags={"write", "chat", OUTBOUND_TAG})
+@mcp.tool(tags={"send", "chat", OUTBOUND_TAG})
 async def set_chat_presence(to: str, state_value: str, media: str = "") -> dict[str, Any]:
     """Show typing or recording indicator in a chat.
 

@@ -16,7 +16,7 @@ from botsapp.key_manager import (
     drift_from_policy,
 )
 from botsapp.secretbox import SecretBox
-from botsapp.waha_keys import DEFAULT_ACTIONS, KeyApiError, KeyInfo
+from botsapp.waha_keys import KeyApiError, KeyInfo
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ async def _stored_secret(db, box, account="sam") -> str:
 
 async def test_provision_creates_a_read_only_key_and_stores_it_encrypted(manager, db, waha, box):
     info = await manager.provision("sam")
-    assert waha.keys[info.id].actions == {**DEFAULT_ACTIONS, **MCP_KEY_ACTIONS}
+    assert waha.keys[info.id].actions == MCP_KEY_ACTIONS
     assert waha.keys[info.id].actions["send"] is False and waha.keys[info.id].actions["read"]
     row = await db.get_account_key("sam")
     assert row is not None and row["key_id"] == info.id
