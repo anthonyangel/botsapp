@@ -2,7 +2,7 @@
 
 Flags make it misbehave in the ways the KeyManager guards against."""
 
-from botsapp.waha_keys import DEFAULT_ACTIONS, KeyApiError, KeyInfo
+from botsapp.waha_keys import WAHA_ACTIONS, KeyApiError, KeyInfo
 
 
 class FakeWaha:
@@ -30,7 +30,7 @@ class FakeWaha:
             session="other" if self.wrong_session else session,
             is_admin=self.make_admin,
             is_active=True,
-            actions={**DEFAULT_ACTIONS, **(self.apply_actions or actions)},
+            actions={**{a: False for a in WAHA_ACTIONS}, **(self.apply_actions or actions)},
             secret=None if self.no_secret else f"wk_secret_{self.n}",
         )
         self.keys[info.id] = info
