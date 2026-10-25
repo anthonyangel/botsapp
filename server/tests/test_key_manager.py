@@ -211,6 +211,41 @@ async def test_rotate_without_a_key(manager):
         await manager.rotate("sam")
 
 
+# ── repair ───────────────────────────────────────────────────────────────────
+
+
+async def test_repair_restores_the_policy_in_place_keeping_the_key(manager, db, waha, box):
+    info = await manager.provision("sam")
+    secret = await _stored_secret(db, box)
+    waha.keys[info.id] = KeyInfo(info.id, "acct-sam", False, True, {**info.actions, "send": True})
+    await manager.repair("sam")
+    assert waha.keys[info.id].actions == MCP_KEY_ACTIONS
+    stored = await db.get_account_key("sam")
+    assert (
+        stored is not None and stored["key_id"] == info.id and stored["actions"] == MCP_KEY_ACTIONS
+    )
+    assert await _stored_secret(db, box) == secret and waha.deleted == []
+
+
+async def test_repair_fails_loudly_when_waha_ignores_the_update(manager, db, waha):
+    info = await manager.provision("sam")
+    waha.apply_actions = {**MCP_KEY_ACTIONS, "send": True}
+    with pytest.raises(KeyManagerError, match="rotate"):
+        await manager.repair("sam")
+    stored = await db.get_account_key("sam")
+    assert stored is not None and stored["actions"]["send"] is True  # what WAHA reports
+    assert info.id in waha.keys
+
+
+async def test_repair_needs_a_key_and_reports_waha_errors(manager, waha):
+    with pytest.raises(KeyManagerError, match="no key"):
+        await manager.repair("sam")
+    await manager.provision("sam")
+    waha.fail.add("update")
+    with pytest.raises(KeyManagerError, match="WAHA"):
+        await manager.repair("sam")
+
+
 # ── verify ───────────────────────────────────────────────────────────────────
 
 

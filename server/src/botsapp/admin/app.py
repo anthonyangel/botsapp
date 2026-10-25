@@ -493,6 +493,7 @@ app = Starlette(
         Route(p("/accounts/{account_id}/key/create"), accounts.key_create, methods=["POST"]),
         Route(p("/accounts/{account_id}/key/rotate"), accounts.key_rotate, methods=["POST"]),
         Route(p("/accounts/{account_id}/key/verify"), accounts.key_verify, methods=["POST"]),
+        Route(p("/accounts/{account_id}/key/repair"), accounts.key_repair, methods=["POST"]),
         Route(p("/accounts/{account_id}/session/status.json"), accounts.session_status_json),
         Route(
             p("/accounts/{account_id}/session/connect"),
