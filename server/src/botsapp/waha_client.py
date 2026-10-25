@@ -152,9 +152,16 @@ _NON_MESSAGE_TYPES = frozenset(
 
 # NOWEB (Baileys) messages have no ``type``; system noise shows up instead as a
 # non-zero ``messageStubType``, or as a message whose only content is protocol
-# plumbing (edits/revokes, key distribution, context info).
+# plumbing (edits/revokes, key distribution, context info) or a pin/unpin event
+# (``pinInChatMessage`` — confirmed live in a group: WAHA surfaces each pin as a
+# body-less message that is just a pointer at the pinned message's key).
 _NOISE_CONTENT_KEYS = frozenset(
-    {"protocolMessage", "senderKeyDistributionMessage", "messageContextInfo"}
+    {
+        "protocolMessage",
+        "senderKeyDistributionMessage",
+        "messageContextInfo",
+        "pinInChatMessage",
+    }
 )
 
 
