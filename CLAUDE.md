@@ -15,7 +15,7 @@ change, deploy topology, storage choice), **add a new numbered decision
 record** rather than just changing code — supersede old records explicitly
 (state which parts) rather than deleting them; the log is meant to stay an
 honest history, not just the current state. `docs/decisions/README.md` has
-been kept in date order, current through 0028.
+been kept in date order, current through 0029.
 
 There is no `docs/plans/` anymore — implementation plans are deleted once
 landed, on purpose (see the convention note in [docs/decisions/README.md](docs/decisions/README.md)):
@@ -53,8 +53,9 @@ Three logical services, two Fly apps once deployed ([0013](docs/decisions/0013-s
   (one WorkOS org, role in WorkOS, grants and chat visibility in the DB), now
   reachable publicly under `/admin` behind that login rather than only over
   Fly's private network ([0028](docs/decisions/0028-caddy-fronted-admin-ui-public-prefix.md)).
-  Its Session and Chats pages act on the account selected in the header (a validated
-  cookie); the Accounts and Users pages manage accounts, sharing and people.
+  The Session page lists every account you hold with live pairing controls inline
+  ([0029](docs/decisions/0029-session-and-accounts-pages-merged.md)); only the Chats page acts on
+  the account selected in the header (a validated cookie); Users manages people.
   Needs `BOTSAPP_ADMIN_EMAIL`. Each account's MCP access can use its own read-only
   WAHA session key, stored encrypted ([0027](docs/decisions/0027-scoped-waha-session-keys.md);
   needs `BOTSAPP_SECRET_KEY`; `WAHA_REQUIRE_SCOPED_KEYS` makes it mandatory); MCP tools carry WAHA action names as

@@ -290,7 +290,7 @@ async def revoke_account(request: Request) -> Response:
 
 
 async def select_account(request: Request) -> Response:
-    """Set which account the Session and Chats pages act on. The cookie is only
+    """Set which account the Chats page acts on. The cookie is only
     a preference: auth.py re-validates it against what the user may select on
     every request."""
     assert state.db is not None
