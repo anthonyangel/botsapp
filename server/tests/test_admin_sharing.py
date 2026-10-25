@@ -228,27 +228,38 @@ async def test_owner_cannot_edit_someone_elses_tags(client, shared):
 # ── landing and navigation ───────────────────────────────────────────────────
 
 
-async def test_someone_with_only_a_shared_account_is_sent_to_accounts_not_a_403(client, shared):
+async def test_someone_with_only_a_shared_account_sees_the_page_with_no_pairing_controls(
+    client, shared
+):
+    # 0029: "/" no longer requires owning the selected account — it lists
+    # every account you hold, owned or shared, each with its own pairing
+    # controls for the ones you own/manage. HER owns nothing here.
     _as(client, HER)
     r = client.get("/")
-    assert r.status_code == 303 and r.headers["location"] == "/accounts"
-    assert 'href="/">Session' not in client.get("/accounts").text  # no Session link
+    assert r.status_code == 200
+    assert "Connect WhatsApp" not in r.text
+    assert "Shared with you" in r.text
 
 
 async def test_the_owner_still_gets_the_session_page_and_link(client, shared):
     _as(client, SAM)
     assert client.get("/").status_code == 200
-    assert 'href="/">Session' in client.get("/accounts").text
+    assert 'href="/">Session' in client.get("/").text
 
 
 async def test_pairing_controls_stay_with_the_owner(client, shared):
+    # Session actions go through the same _manageable() check as grant/
+    # revoke/delete/key — "Unknown account." either way, so a non-owner
+    # can't tell a real account they don't own from one that doesn't exist.
     _as(client, HER)
-    assert _post(client, "/session/disconnect").status_code == 403
+    r = _post(client, "/accounts/sam/session/disconnect")
+    assert r.status_code == 303 and "error=Unknown" in r.headers["location"]
     _as(client, SAM)
-    assert _post(client, "/session/disconnect").status_code == 303
+    r = _post(client, "/accounts/sam/session/disconnect")
+    assert r.status_code == 303 and "error=" not in r.headers["location"]
 
 
 async def test_accounts_page_links_each_viewer_to_their_chat_choices(client, shared):
     _as(client, SAM)
-    page = client.get("/accounts").text
+    page = client.get("/").text
     assert "Choose chats" in page and "viewer%3Dher%40example.com" in page

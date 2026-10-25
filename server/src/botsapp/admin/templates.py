@@ -114,7 +114,6 @@ class NavContext:
     is_admin: bool = True
     accounts: tuple[tuple[str, str], ...] = ()  # (id, label) the user can select
     account: str = ""
-    can_manage_session: bool = True  # owner of the selected account, or an admin
 
 
 @dataclass(frozen=True)
@@ -201,12 +200,9 @@ def _select_account_form(account_id: str, *, label: str, next_url: str | None = 
 
 def _nav_html() -> str:
     ctx = nav.get()
-    links = []
-    if ctx.can_manage_session:
-        links.append(f'<a class="mdl-navigation__link" href="{p("/")}">Session</a>')
-    links += [
+    links = [
+        f'<a class="mdl-navigation__link" href="{p("/")}">Session</a>',
         f'<a class="mdl-navigation__link" href="{p("/chats")}">Chats &amp; Groups</a>',
-        f'<a class="mdl-navigation__link" href="{p("/accounts")}">Accounts</a>',
     ]
     if ctx.is_admin:
         links.append(f'<a class="mdl-navigation__link" href="{p("/users")}">Users</a>')
@@ -283,92 +279,92 @@ def _avatar(url: str | None, alt: str) -> str:
     return '<span class="avatar-placeholder"></span>'
 
 
-def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
-    """``status``: SessionStatus as a dict (see bridge.py) — the shape
-    admin.app._poll_status() builds via dataclasses.asdict(). Poll-only
+def _pairing_panel(account_id: str, status: dict[str, Any]) -> str:
+    """Live Connect/QR/Disconnect controls for one account's card (0029:
+    folded in from the old standalone Session page, which showed this for
+    only whichever account happened to be selected). ``status``:
+    SessionStatus as a dict (see bridge.py) — the shape
+    accounts._account_status() builds via dataclasses.asdict(). Poll-only
     (see that function's docstring for why this matters): loading or
-    refreshing this page never triggers a WhatsApp connect attempt on its
-    own."""
+    refreshing this card never triggers a WhatsApp connect attempt on its
+    own.
+
+    Each card's QR-poll script is wrapped in its own closure (keyed by
+    ``account_id``) so two accounts mid-pairing on the same page don't
+    collide over a shared ``pollTimer``/img element id.
+    """
+    aid = html.escape(quote(account_id, safe=""), quote=True)
+    base = f"{p('/accounts')}/{aid}/session"
     if status.get("errors"):
-        body = f"""
-        <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:420px;padding:24px;">
-          <p><span class="status-dot disconnected"></span>Can't reach the bridge</p>
-          <p class="tab-note">{html.escape("; ".join(status["errors"]))}</p>
-          <a class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
-             href="{p("/")}">
-            Retry
-          </a>
-        </div>"""
-    elif status.get("logged_in"):
+        return f"""
+      <div class="pairing-panel">
+        <p><span class="status-dot disconnected"></span>Can't reach the bridge</p>
+        <p class="tab-note">{html.escape("; ".join(status["errors"]))}</p>
+      </div>"""
+    if status.get("logged_in"):
         name_html = html.escape(status.get("name") or "")
         jid_html = html.escape(status.get("jid") or "")
         # Show name/jid only when WAHA actually returned them (a truly live
         # session); a stale persisted session can appear WORKING but have
         # no me.id / pushName yet because the phone is unreachable.
-        identity_html = ""
-        if name_html or jid_html:
-            identity_html = f"<p>{name_html}</p><p><code>{jid_html}</code></p>"
-        else:
-            identity_html = (
-                '<p class="tab-note">No account details yet — '
-                "the session may be stale. Use the buttons below to re-pair.</p>"
+        identity_html = (
+            f"<p>{name_html}</p><p><code>{jid_html}</code></p>"
+            if name_html or jid_html
+            else (
+                '<p class="tab-note">No account details yet — the session may be '
+                "stale. Use the buttons below to re-pair.</p>"
             )
-        body = f"""
-        <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:420px;padding:24px;">
-          <p><span class="status-dot connected"></span><strong>Connected</strong></p>
-          {identity_html}
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
-            <form method="post" action="{p("/session/disconnect")}">
-              <button class="mdl-button mdl-js-button mdl-button--raised" type="submit"
-                      title="Log out gracefully — session stays in STOPPED state; click Connect
-                             WhatsApp to re-pair">
-                Disconnect
-              </button>
-            </form>
-            <form method="post" action="{p("/session/delete")}"
-                  onsubmit="return confirm(
-                    'Delete the saved session entirely and force a fresh QR scan?')">
-              <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--accent"
-                      type="submit"
-                      title="Delete all saved auth material and force a fresh QR scan">
-                Force re-pair
-              </button>
-            </form>
-          </div>
-        </div>"""
-    elif status.get("qr_code"):
+        )
+        return f"""
+      <div class="pairing-panel">
+        <p><span class="status-dot connected"></span><strong>Connected</strong></p>
+        {identity_html}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+          <form method="post" action="{base}/disconnect">
+            <button class="mdl-button mdl-js-button" type="submit"
+                    title="Log out gracefully — session stays in STOPPED state; click Connect
+                           WhatsApp to re-pair">
+              Disconnect
+            </button>
+          </form>
+          <form method="post" action="{base}/reset"
+                onsubmit="return confirm(
+                  'Delete the saved session entirely and force a fresh QR scan?')">
+            <button class="mdl-button mdl-js-button mdl-button--accent" type="submit"
+                    title="Delete all saved auth material and force a fresh QR scan">
+              Force re-pair
+            </button>
+          </form>
+        </div>
+      </div>"""
+    if status.get("qr_code"):
         qr = status["qr_code"]
         src = qr if qr.startswith("data:") else f"data:image/png;base64,{qr}"
-        body = f"""
-        <div class="mdl-card mdl-shadow--2dp qr-card"
-             style="width:100%;max-width:420px;padding:24px;">
-          <p><span class="status-dot waiting"></span>Waiting for QR scan</p>
-          <img id="qr-img" src="{html.escape(src, quote=True)}" alt="QR code">
-          <p class="tab-note">
-            Scan with WhatsApp on your phone. The bridge rotates this code
-            periodically and gives up after roughly a minute unscanned — this
-            page keeps itself in sync, but if it's been sitting a while, switch
-            back to this tab before scanning so it's had a chance to catch up.
-          </p>
-        </div>
-        <!-- Belt-and-suspenders fallback: a background tab's JS timers can get
-             throttled or paused outright, silently leaving a dead QR on screen.
-             A meta-refresh reload is safe now that / never triggers connect —
-             worst case it just re-renders current server state. -->
-        <meta http-equiv="refresh" content="15">
+        img_id = f"qr-img-{aid}"
+        return f"""
+      <div class="pairing-panel qr-card">
+        <p><span class="status-dot waiting"></span>Waiting for QR scan</p>
+        <img id="{img_id}" src="{html.escape(src, quote=True)}" alt="QR code">
+        <p class="tab-note">
+          Scan with WhatsApp on your phone. The bridge rotates this code
+          periodically and gives up after roughly a minute unscanned — this
+          card keeps itself in sync, but if it's been sitting a while, switch
+          back to this tab before scanning so it's had a chance to catch up.
+        </p>
         <script>
+        (function () {{
           // Poll status only (never re-triggers connect — see
-          // admin.app._poll_status) so an in-progress scan is never
+          // accounts._account_status) so an in-progress scan is never
           // orphaned by a page reload re-issuing a fresh QR underneath it.
           var pollTimer = null;
 
           function pollNow() {{
-            fetch("{p("/session/status.json")}")
+            fetch("{base}/status.json")
               .then(function (r) {{ return r.json(); }})
               .then(function (s) {{
                 if (s.logged_in) {{ window.location.reload(); return; }}
                 if (s.qr_code) {{
-                  var img = document.getElementById("qr-img");
+                  var img = document.getElementById("{img_id}");
                   if (img) {{
                     img.src = s.qr_code.indexOf("data:") === 0
                       ? s.qr_code
@@ -399,19 +395,18 @@ def session_page(status: dict[str, Any], bridge_name: str = "") -> str:
           }});
 
           scheduleNext();
-        </script>"""
-    else:
-        body = f"""
-        <div class="mdl-card mdl-shadow--2dp" style="width:100%;max-width:420px;padding:24px;">
-          <p><span class="status-dot disconnected"></span>Not connected</p>
-          <form method="post" action="{p("/session/connect")}">
-            <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
-                    type="submit">
-              Connect WhatsApp
-            </button>
-          </form>
-        </div>"""
-    return _page("WhatsApp session", body, bridge_name)
+        }})();
+        </script>
+      </div>"""
+    return f"""
+      <div class="pairing-panel">
+        <p><span class="status-dot disconnected"></span>Not connected</p>
+        <form method="post" action="{base}/connect">
+          <button class="mdl-button mdl-js-button mdl-button--colored" type="submit">
+            Connect WhatsApp
+          </button>
+        </form>
+      </div>"""
 
 
 def not_connected_page(bridge_name: str = "") -> str:
@@ -1221,6 +1216,7 @@ def _account_card(row: dict[str, Any], current: str) -> str:
     aid = html.escape(quote(row["id"], safe=""), quote=True)
     label = html.escape(row["label"])
     badge = ' <span class="badge">selected</span>' if row["id"] == current else ""
+    pairing = _pairing_panel(row["id"], row["session"])
     grants = "".join(_grant_row(row["id"], e) for e in row["granted"])
     grants = (
         f'<ul style="list-style:none;padding:0;margin:8px 0;">{grants}</ul>'
@@ -1278,8 +1274,9 @@ def _account_card(row: dict[str, Any], current: str) -> str:
     <div class="mdl-card mdl-shadow--2dp" style="{_CARD_STYLE}">
       <h5 style="margin:0;">{label}{badge}</h5>
       <p class="tab-note">id <code>{html.escape(row["id"])}</code> · owner
-        {html.escape(row["owner"])} · WhatsApp: <b>{html.escape(row["status"])}</b></p>
-      <p>{_select_account_form(row["id"], label="Use this account")}</p>
+        {html.escape(row["owner"])}</p>
+      {pairing}
+      <p>{_select_account_form(row["id"], label="Use this account for Chats")}</p>
       {key_block}
       <b>Shared with</b>
       {grants}
@@ -1288,7 +1285,7 @@ def _account_card(row: dict[str, Any], current: str) -> str:
     </div>"""
 
 
-def accounts_page(
+def session_page(
     rows: list[dict[str, Any]],
     shared: list[tuple[str, str, str]],
     users: list[str],
@@ -1298,8 +1295,11 @@ def accounts_page(
     error: str = "",
     bridge_name: str = "",
 ) -> str:
-    """WhatsApp accounts you own (all of them, for an admin), who they are shared
-    with, and which one the Session and Chats pages act on."""
+    """Every WhatsApp account you own (all of them, for an admin) or were
+    granted, with live Connect/QR/Disconnect controls inline on each one
+    (0029: the old standalone Session page showed this for only whichever
+    account happened to be selected; folded in here, per account, instead).
+    ``current`` is still used — it's which account the Chats page acts on."""
     flash = ""
     if notice:
         flash += f'<p class="tab-note" role="status">{html.escape(notice)}</p>'
@@ -1322,8 +1322,8 @@ def accounts_page(
         <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
                 type="submit">Create</button>
       </form>
-      <p class="tab-note">Creates the account and an empty WhatsApp session. The owner then
-        selects it and pairs it from the Session page.</p>
+      <p class="tab-note">Creates the account and an empty WhatsApp session, ready for the
+        owner to pair below.</p>
     </div>"""
     cards = "".join(_account_card(r, current) for r in rows) or (
         "<p class='tab-note'>You don't own any account yet.</p>"
@@ -1335,5 +1335,15 @@ def accounts_page(
             for i, label, owner in shared
         )
         shared_list = f"<h5>Shared with you</h5><ul>{items}</ul>"
-    body = f"{flash}{create}{cards}{shared_list}"
-    return _page("Accounts", body, bridge_name)
+    any_qr_pending = any(
+        r["session"].get("qr_code") and not r["session"].get("logged_in")
+        for r in rows
+        if not r["session"].get("errors")
+    )
+    # Belt-and-suspenders fallback: a background tab's JS poll timers can get
+    # throttled or paused outright, silently leaving a dead QR on screen. A
+    # page-level meta-refresh is safe now that this page never triggers
+    # connect on its own — worst case it just re-renders current state.
+    refresh = '<meta http-equiv="refresh" content="15">' if any_qr_pending else ""
+    body = f"{flash}{refresh}{create}{cards}{shared_list}"
+    return _page("Session", body, bridge_name)

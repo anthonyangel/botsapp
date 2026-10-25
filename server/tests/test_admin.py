@@ -59,9 +59,16 @@ def client(monkeypatch):
         # Sign in as an admin who owns the default account (auth is covered
         # in test_admin_auth.py); chat_db stands in for the per-viewer handle.
         state.db.get_user = AsyncMock(return_value={"email": "admin@example.com", "is_admin": True})
-        primary = {"id": "default", "label": "Primary", "owner_email": "admin@example.com"}
+        primary = {
+            "id": "default",
+            "label": "Primary",
+            "owner_email": "admin@example.com",
+            "waha_key_id": None,
+            "waha_key_actions": None,
+        }
         state.db.list_accounts_for_user = AsyncMock(return_value=[primary])
         state.db.list_accounts = AsyncMock(return_value=[primary])
+        state.db.list_users = AsyncMock(return_value=[{"email": "admin@example.com"}])
         state.db.get_account = AsyncMock(return_value=primary)
         state.db.list_grants = AsyncMock(return_value=[])
 
@@ -69,6 +76,8 @@ def client(monkeypatch):
             return state.bridge
 
         monkeypatch.setattr(admin_app, "_bridge", _bridge)
+        assert state.registry is not None
+        state.registry.for_account = AsyncMock(return_value=state.bridge)
         chat_db = AsyncMock()
         chat_db.get_chat_metadata.return_value = None
         monkeypatch.setattr(admin_app, "_chat_db", lambda _request, _viewer=None: chat_db)
@@ -126,7 +135,7 @@ def test_session_status_json_reflects_current_state(client):
     state.bridge.get_session_status.return_value = SessionStatus(
         connected=True, logged_in=False, qr_code="data:image/png;base64,AAAA"
     )
-    r = client.get("/session/status.json")
+    r = client.get("/accounts/default/session/status.json")
     assert r.status_code == 200
     body = r.json()
     assert body["logged_in"] is False
@@ -140,7 +149,7 @@ def test_session_status_json_reports_unreachable_bridge_as_error(client):
     state.bridge.get_session_status.return_value = SessionStatus(
         errors=["Cannot reach the bridge: no route to host"]
     )
-    r = client.get("/session/status.json")
+    r = client.get("/accounts/default/session/status.json")
     assert r.status_code == 200
     assert "no route to host" in r.json()["errors"][0]
 
@@ -148,7 +157,7 @@ def test_session_status_json_reports_unreachable_bridge_as_error(client):
 def test_connect_button_triggers_the_actual_connect_attempt(client):
     state.bridge.get_session_status.return_value = SessionStatus(connected=False, logged_in=False)
     state.bridge.connect.return_value = SessionStatus(connected=True, logged_in=False, qr_code="x")
-    r = client.post("/session/connect", follow_redirects=False)
+    r = client.post("/accounts/default/session/connect", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/"
     state.bridge.connect.assert_awaited_once()
