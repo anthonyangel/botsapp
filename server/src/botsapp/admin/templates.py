@@ -1244,9 +1244,16 @@ def _account_card(row: dict[str, Any], current: str) -> str:
                 if not row.get("key_drift")
                 else "<b>differs from intended</b>: " + html.escape(row["key_drift"])
             )
+            repair = (
+                f"""
+        <form method="post" action="{p("/accounts")}/{aid}/key/repair" style="display:inline;">
+          <button class="mdl-button mdl-js-button" type="submit">Repair</button></form>"""
+                if row.get("key_drift")
+                else ""
+            )
             buttons = f"""
         <form method="post" action="{p("/accounts")}/{aid}/key/verify" style="display:inline;">
-          <button class="mdl-button mdl-js-button" type="submit">Verify</button></form>
+          <button class="mdl-button mdl-js-button" type="submit">Verify</button></form>{repair}
         <form method="post" action="{p("/accounts")}/{aid}/key/rotate" style="display:inline;"
               onsubmit="return confirm('Replace this account\'s access key?');">
           <button class="mdl-button mdl-js-button" type="submit">Rotate</button></form>"""

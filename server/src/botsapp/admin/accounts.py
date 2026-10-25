@@ -343,6 +343,9 @@ async def _key_action(request: Request, action: str) -> Response:
                 "" if old_deleted else " The old key couldn't be deleted in WAHA; remove it there."
             )
             return _ok(f"Rotated the access key for '{account_id}'.{extra}")
+        if action == "repair":
+            await manager.repair(account_id)
+            return _ok(f"Restored the intended scope on the access key for '{account_id}'.")
         verification = await manager.verify(account_id)
     except KeyManagerError as exc:
         return _err(str(exc))
@@ -350,7 +353,7 @@ async def _key_action(request: Request, action: str) -> Response:
         drift = describe_drift(verification.drift)
         return _err(
             f"The key's scope in WAHA differs from what we want ({drift}). "
-            "Rotate it to restore the intended scope."
+            "Repair it to restore the intended scope."
         )
     return _ok(f"The access key for '{account_id}' is intact and read-only.")
 
@@ -361,6 +364,10 @@ async def key_create(request: Request) -> Response:
 
 async def key_rotate(request: Request) -> Response:
     return await _key_action(request, "rotate")
+
+
+async def key_repair(request: Request) -> Response:
+    return await _key_action(request, "repair")
 
 
 async def key_verify(request: Request) -> Response:

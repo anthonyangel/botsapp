@@ -17,6 +17,8 @@ fails, so a failure never leaves a live key we don't know about:
 * verify  — re-read the key from WAHA and store the actions WAHA reports, so edits
             made in WAHA's own dashboard are noticed; differences from our policy
             are returned as drift, not hidden.
+* repair  — put a drifted key back to the policy in place (WAHA's PUT keeps the key
+            value, so nothing else has to change); rotation is the fallback.
 * revoke  — delete in WAHA, then forget it locally.
 
 What is stored is what WAHA reported, never what we asked for. The secret is only
@@ -239,6 +241,29 @@ class KeyManager:
             raise KeyManagerError("The key is deactivated in WAHA; rotate it.")
         await self._db.set_account_key_actions(account_id, reported.actions)
         return Verification(stored["key_id"], reported.actions, drift_from_policy(reported.actions))
+
+    async def repair(self, account_id: str) -> Verification:
+        """Reapply the intended scope to the existing key, in place.
+
+        WAHA's ``PUT /api/keys/{id}`` changes ``actions`` without changing the key
+        value, effective on the next request (#47), so the stored secret stays valid.
+        What is stored afterwards is what WAHA reports, and any remaining drift is an
+        error.
+        """
+        await self._account(account_id)
+        stored = await self._db.get_account_key(account_id)
+        if stored is None:
+            raise KeyManagerError("This account has no key.")
+        try:
+            updated = await self._api.update_key_actions(stored["key_id"], dict(MCP_KEY_ACTIONS))
+        except (KeyApiError, RuntimeError, aiohttp.ClientError, TimeoutError) as exc:
+            raise self._wrap(exc) from exc
+        await self._db.set_account_key_actions(account_id, updated.actions)
+        if drift := drift_from_policy(updated.actions):
+            raise KeyManagerError(
+                f"WAHA did not apply the intended scope ({describe_drift(drift)}); rotate the key."
+            )
+        return Verification(stored["key_id"], updated.actions, {})
 
     async def revoke(self, account_id: str) -> None:
         """Delete the key in WAHA, then forget it. No key is a no-op."""
