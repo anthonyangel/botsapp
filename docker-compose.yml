@@ -9,7 +9,6 @@ x-bridge-env: &bridge-env
   BOTSAPP_ADMIN_EMAIL: ${BOTSAPP_ADMIN_EMAIL:-}
   # Scoped WAHA keys (docs/decisions/0027), see .env.example.
   BOTSAPP_SECRET_KEY: ${BOTSAPP_SECRET_KEY:-}
-  WAHA_REQUIRE_SCOPED_KEYS: ${WAHA_REQUIRE_SCOPED_KEYS:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   TZ: Asia/Jerusalem
 
@@ -84,10 +83,8 @@ services:
 
   admin-ui:
     # Behind an AuthKit login (docs/decisions/0026, admin/auth.py) unless
-    # LOCAL_DEV_DISABLE_AUTH/ADMIN_DISABLE_AUTH is set. The login has not been
-    # exercised against a live WorkOS environment yet, so keep this loopback-
-    # only and off any public Fly service until it has. Same image as
-    # mcp-server, different entrypoint.
+    # LOCAL_DEV_DISABLE_AUTH is set. Same image as mcp-server, different
+    # entrypoint.
     build: ./server
     command: ["uv", "run", "uvicorn", "botsapp.admin_main:app", "--host", "0.0.0.0", "--port", "8100"]
     ports:
@@ -95,7 +92,6 @@ services:
     environment:
       <<: *bridge-env
       LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
-      ADMIN_DISABLE_AUTH: ${ADMIN_DISABLE_AUTH:-}
       WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
       WORKOS_API_KEY: ${WORKOS_API_KEY:-}
       WORKOS_ORG_ID: ${WORKOS_ORG_ID:-}

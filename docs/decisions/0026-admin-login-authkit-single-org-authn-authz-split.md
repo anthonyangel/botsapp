@@ -1,6 +1,6 @@
 # 0026 — Admin login via AuthKit, one WorkOS organization, and the authn/authz split
 
-**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Users page implemented in #49 (below). Accounts page implemented in #50 and the self-service Chats behaviour in #51 (both below). Still to do: (self-service), #52 (scoped WAHA keys).
+**Status:** Decided (2026-10). Login implemented in #48 against a stubbed WorkOS client (`admin/auth.py`); **the real WorkOS code exchange has not been exercised against a live environment.** Users page implemented in #49 (below). Accounts page implemented in #50 and the self-service Chats behaviour in #51 (both below). All of it is implemented (scoped WAHA keys in #52; the transition scaffolding removed in [0030](0030-multi-tenancy-cleanup-legacy-tables-and-fallbacks-removed.md)).
 
 ## Context
 

@@ -11,9 +11,9 @@ for the reasoning behind every architectural choice here.
 |---|---|---|
 | `waha` | Talks to WhatsApp | private |
 | `mcp-server` | The MCP endpoint — the only thing meant to be reachable beyond this machine, gated by AuthKit login (the only port exposed publicly once deployed — see [docs/decisions/0013](docs/decisions/0013-single-fly-app-shared-volume.md)) | loopback locally |
-| `admin-ui` | QR login, chat allowlist, tags — AuthKit login ([0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md)), still kept network-private until that login is verified live | loopback locally |
+| `admin-ui` | QR login, chat allowlist, tags — AuthKit login ([0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md)), public under `/admin` | loopback locally |
 
-`mcp-server` and `admin-ui` run from the same image (`server/Dockerfile`, different `command:`) and share one small SQLite file for `chat_metadata` (tags/allowlist) rather than a database service — see [docs/decisions/0007](docs/decisions/0007-sqlite-for-metadata-store.md). On Fly.io they run as two processes inside one Machine, sharing one volume, precisely to keep that shared file working (Fly volumes attach to only one Machine at a time) — see [docs/decisions/0013](docs/decisions/0013-single-fly-app-shared-volume.md). `waha` deploys as its own separate Fly app.
+`mcp-server` and `admin-ui` run from the same image (`server/Dockerfile`, different `command:`) and share one small SQLite file for users, accounts and per-viewer chat access (tags/allowlist) rather than a database service — see [docs/decisions/0007](docs/decisions/0007-sqlite-for-metadata-store.md). On Fly.io they run as two processes inside one Machine, sharing one volume, precisely to keep that shared file working (Fly volumes attach to only one Machine at a time) — see [docs/decisions/0013](docs/decisions/0013-single-fly-app-shared-volume.md). `waha` deploys as its own separate Fly app.
 
 ## Run it locally
 
@@ -125,6 +125,5 @@ and [0013](docs/decisions/0013-single-fly-app-shared-volume.md) for how
 simply no public service block for its port).
 `admin-ui` now has an AuthKit login ([0026](docs/decisions/0026-admin-login-authkit-single-org-authn-authz-split.md),
 superseding the no-login rule in [0004](docs/decisions/0004-chat-allowlist-and-admin-ui.md)),
-but it has only been tested against a stubbed WorkOS client — keep it private
-(`ADMIN_DISABLE_AUTH` for the existing private setup) until it has been
-exercised against a real environment. Settings are in `.env.example`.
+and is public under `/admin` ([0028](docs/decisions/0028-caddy-fronted-admin-ui-public-prefix.md)).
+It refuses to start without the login settings in `.env.example`.

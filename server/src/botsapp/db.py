@@ -9,9 +9,10 @@ SQLite-backed (via aiosqlite), not Postgres — this table is small
 (family-scale, a few dozen chats at most) and doesn't need a separate
 database server.
 
-``is_allowed`` here is the actual privacy boundary the MCP server enforces
-— it's only ever written by ``set_chat_allowed``, which the admin UI calls
-and nothing in ``tools.py`` does, so a chat can never allow itself.
+``chat_access.is_allowed`` is the actual privacy boundary the MCP server
+enforces — it's only ever written by ``set_chat_access_allowed``, which the
+admin UI calls and nothing in ``tools.py`` does, so a chat can never allow
+itself.
 """
 
 import json
@@ -55,21 +56,30 @@ class DatabaseManager:
             raise RuntimeError("Database not connected — call connect() first.")
         return self._conn
 
-    # ── Chat metadata ─────────────────────────────────────────────────────
+    # ── Schema ─────────────────────────────────────────────────────
 
     async def ensure_schema(self) -> None:
         """Create the tables if they don't exist yet. Called once at startup."""
-        await queries.create_chat_metadata_table(self.connection)
-        await queries.create_allowed_emails_table(self.connection)
         await queries.create_users_table(self.connection)
         await queries.create_accounts_table(self.connection)
         await self._add_missing_account_columns()
         await queries.create_grants_table(self.connection)
         await queries.create_chat_access_table(self.connection)
-        # One-time, idempotent: anyone on the legacy email allowlist becomes
-        # a user. After this users is the source of truth (0025).
-        await queries.backfill_users_from_allowed_emails(self.connection)
+        await self._drop_adopted_legacy_tables()
         await self.connection.commit()
+
+    async def _drop_adopted_legacy_tables(self) -> None:
+        """Drop the single-tenant ``chat_metadata`` / ``allowed_emails`` tables (0030).
+
+        Their data was adopted into ``chat_access`` / ``users`` by the bootstrap
+        (0025), which creates an account. So they are dropped only once an account
+        exists, and a database that was never bootstrapped keeps them until it is.
+        Starting a build older than this one against the dropped tables would just
+        recreate them empty."""
+        if not await self.list_accounts():
+            return
+        await self.connection.execute("DROP TABLE IF EXISTS chat_metadata")
+        await self.connection.execute("DROP TABLE IF EXISTS allowed_emails")
 
     async def _add_missing_account_columns(self) -> None:
         """CREATE TABLE IF NOT EXISTS leaves an older ``accounts`` table as it was;
@@ -103,78 +113,23 @@ class DatabaseManager:
     def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
         """SQLite has no array or boolean type — tags round-trips through
         JSON text, is_allowed through 0/1 — so every read goes through here
-        to hand callers the same shapes the old Postgres version did
-        (tags: list[str], is_allowed: bool)."""
+        to hand callers tags: list[str] and is_allowed: bool."""
         d = dict(row)
         d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
         d["is_allowed"] = bool(d.get("is_allowed"))
         return d
 
-    async def upsert_chat_metadata(self, jid: str, tags: list[str]) -> None:
-        await queries.upsert_chat_metadata(self.connection, jid=jid, tags=json.dumps(tags))
-        await self.connection.commit()
-
-    async def get_chat_metadata(self, jid: str) -> dict[str, Any] | None:
-        row = await queries.get_chat_metadata(self.connection, jid=jid)
-        return self._row_to_dict(row) if row else None
-
-    async def search_by_tags(self, tags: list[str]) -> list[dict[str, Any]]:
-        """Allowed chats carrying any of ``tags`` — backs the MCP-facing
-        ``list_chats(tags=...)`` and ``list_groups(tags=...)`` tools, the
-        primary (metadata-first) way those tools look a chat/group up.
-
-        Case-insensitive: tags are typed by a person (via the admin UI or
-        add_tag) or guessed by Claude from a user's phrasing, and "Shaked"
-        vs "shaked" shouldn't be the difference between a hit and a miss.
-
-        Fetches every allowed row and filters in Python rather than in SQL —
-        a full scan that's free at this table's size (see module docstring).
-        ``name`` here just falls back to the jid; this table has no separate
-        contacts data to resolve a display name from.
-        """
-        wanted = {t.lower() for t in tags}
-        rows = [self._row_to_dict(r) async for r in queries.list_metadata_rows(self.connection)]
-        matches = [r for r in rows if wanted & {t.lower() for t in r["tags"]}]
-        for r in matches:
-            r["name"] = r["jid"]
-        matches.sort(key=lambda r: r["updated_at"], reverse=True)
-        return matches
-
-    # ── Allowlist ────────────────────────────────────────────────────────
-
-    async def list_allowed_jids(self) -> set[str]:
-        return {r["jid"] async for r in queries.list_allowed_jids(self.connection)}
-
-    async def set_chat_allowed(self, jid: str, is_allowed: bool) -> None:
-        await queries.set_chat_allowed(self.connection, jid=jid, is_allowed=is_allowed)
-        await self.connection.commit()
-
-    # ── Email allowlist ──────────────────────────────────────────────────
-    # Who's allowed to authenticate to the MCP server at all — app.py's
-    # allowed_family_email checks this per request. Distinct from the chat
-    # allowlist above (which gates what an already-authenticated caller can
-    # see). See docs/decisions/0015-email-allowlist-in-db.md.
+    # ── Users ────────────────────────────────────────────────────────────
+    # The "botsapp user" (docs/decisions/0025): an email that may log in.
 
     @staticmethod
     def _normalize_email(email: str) -> str:
         return email.strip().lower()
 
-    async def list_allowed_emails(self) -> list[str]:
-        return [u["email"] for u in await self.list_users()]
-
-    async def add_allowed_email(self, email: str) -> None:
-        await self.add_user(email)
-
-    async def remove_allowed_email(self, email: str) -> None:
-        await self.remove_user(email)
-
     async def is_email_allowed(self, email: str) -> bool:
+        """Whether this email may authenticate to the MCP server at all
+        (app.py's allowed_family_email, docs/decisions/0015)."""
         return await self.get_user(email) is not None
-
-    # ── Users ────────────────────────────────────────────────────────────
-    # The "botsapp user" (docs/decisions/0025): an email that may log in.
-    # Replaces the bare allowed_emails list; the email-allowlist methods
-    # above are thin wrappers kept so callers don't change until phase 3.
 
     @staticmethod
     def _user_row(row: aiosqlite.Row) -> dict[str, Any]:
@@ -343,7 +298,7 @@ class DatabaseManager:
         ]
 
     # ── Per-(account, viewer) chat access ────────────────────────────────
-    # Successor to the global chat_metadata methods above. Every method
+    # Every method
     # requires the viewer to actually hold access to the account, so a
     # revoked or never-granted viewer can neither read nor write rows.
 
@@ -417,7 +372,10 @@ class DatabaseManager:
     async def search_by_tags_for(
         self, account_id: str, viewer_email: str, tags: list[str]
     ) -> list[dict[str, Any]]:
-        """Per-viewer counterpart of ``search_by_tags`` (case-insensitive)."""
+        """Allowed chats carrying any of ``tags`` (case-insensitive: tags are typed by
+        a person or guessed from a phrasing, so "Shaked" vs "shaked" mustn't miss).
+        A full scan in Python, free at this table's family scale. ``name`` falls back
+        to the jid; this table has no contacts data to resolve one from."""
         viewer = self._normalize_email(viewer_email)
         if not await self.has_account_access(account_id, viewer):
             return []
@@ -439,16 +397,11 @@ class DatabaseManager:
     async def bootstrap(
         self, admin_email: str, waha_session: str, account_id: str = "default"
     ) -> None:
-        """Idempotently adopt the single-tenant data (0025 phase 1): make
-        ``admin_email`` an admin user, give them the bootstrap account bound to
-        the existing WAHA session, and copy the legacy ``chat_metadata`` rows
-        into their ``chat_access``. Safe to run from both processes at every
-        start; never overwrites rows that already exist."""
+        """Idempotently make ``admin_email`` an admin user with the bootstrap account
+        bound to the existing WAHA session (0025). Safe to run from both processes
+        at every start; never overwrites rows that already exist."""
         admin = self._normalize_email(admin_email)
         await self.add_user(admin, is_admin=True)
         await self.set_user_admin(admin, True)
         await self.add_account(account_id, admin, waha_session, label="Primary")
-        await queries.backfill_chat_access_from_legacy(
-            self.connection, account_id=account_id, viewer_email=admin
-        )
         await self.connection.commit()

@@ -1,13 +1,13 @@
 # 0025 — Multi-tenancy: users, accounts, grants, per-viewer chat access
 
-**Status:** Decided (2026-10). Phases 1–4 are implemented on PR #45 (schema, bridge registry, scoped MCP enforcement, and the admin login and pages decided in [0026](0026-admin-login-authkit-single-org-authn-authz-split.md)); phase 5 (onboarding the second user) waits on the live checks below.
+**Status:** Decided (2026-10). Phases 1–4 are implemented on PR #45 (schema, bridge registry, scoped MCP enforcement, and the admin login and pages decided in [0026](0026-admin-login-authkit-single-org-authn-authz-split.md)); phase 5 (onboarding the second user) waits on the live checks below. The code is complete and the single-tenant scaffolding is gone ([0030](0030-multi-tenancy-cleanup-legacy-tables-and-fallbacks-removed.md)); what remains is live verification, not code.
 
 **Where things stand / what's left** (ideas and follow-ups live in GitHub issues, not in this file). Everything below up to #54 is built in PR #45 against stubbed WorkOS/WAHA and stays open until verified live:
 - Live WAHA probe: multi-session, session keys, key updates, scope table — #47. Run 2026-10-25 without a paired account: multi-session and scoped keys work, `PUT /api/keys` edits in place, scope table recorded (see [0027](0027-scoped-waha-session-keys.md)). Still open: checks needing a paired phone (full read path, media key, memory of a paired session).
 - Admin login, Users, Accounts, self-service Chats — #48, #49, #50, #51 (each has a "remaining" checklist; a real WorkOS login is the common blocker).
 - Per-account WAHA session keys, encrypted in the DB — [0027](0027-scoped-waha-session-keys.md), #52; MCP tools shown only when the key's scopes allow them — #54.
 - Not built: pending-invitation display on the Users page — #57; `tools/list_changed` after key/share/pairing changes — #58; the setup runbook — #56; Jinja2 for the admin templates — #55.
-- Retire the legacy tables, single-tenant code and transition scaffolding (admin-key fallback, `ADMIN_DISABLE_AUTH`) once live — #53.
+- Legacy tables, single-tenant code and transition scaffolding retired — [0030](0030-multi-tenancy-cleanup-legacy-tables-and-fallbacks-removed.md), #53.
 
 ## Context
 

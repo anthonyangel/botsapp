@@ -11,9 +11,7 @@ can't end up on the powerful key by forgetting to say):
 
 * ``"mcp"``   — the MCP server's read path. Uses the account's own scoped session
   key (decrypted from the database). With no stored key it **fails closed**
-  (``NoScopedKeyError``) when ``require_scoped_keys`` is set; otherwise, as a
-  transition while keys are being provisioned, it falls back to the admin key and
-  logs a warning once per account.
+  (``NoScopedKeyError``); there is no fallback to the admin key.
 * ``"admin"`` — the admin UI: session lifecycle, QR and the key API. Uses the
   admin key.
 
@@ -61,7 +59,7 @@ class ScopedKeyError(Exception):
 
 
 class NoScopedKeyError(ScopedKeyError):
-    """The account has no scoped key and the fallback to the admin key is off."""
+    """The account has no scoped key."""
 
 
 class ScopedKeyUnreadableError(ScopedKeyError):
@@ -88,16 +86,13 @@ class BridgeRegistry:
         admin_api_key: str | None,
         *,
         box: SecretBox | None = None,
-        require_scoped_keys: bool = False,
     ) -> None:
         self._db = db
         self._base_url = base_url
         self._admin_api_key = admin_api_key
         self._box = box
-        self._require_scoped_keys = require_scoped_keys
         # (waha_session, purpose) -> (fingerprint of the key it was built with, client)
         self._clients: dict[tuple[str, str], tuple[str, WAHAClient]] = {}
-        self._warned_fallback: set[str] = set()
         # Stale clients waiting out their grace period before being closed.
         self._closing: dict[asyncio.Task[None], WAHAClient] = {}
         self._clients_lock = asyncio.Lock()
@@ -147,17 +142,7 @@ class BridgeRegistry:
 
         stored = await self._db.get_account_key(account_id)
         if stored is None:
-            if self._require_scoped_keys:
-                raise NoScopedKeyError(f"account {account_id!r} has no scoped WAHA key")
-            if account_id not in self._warned_fallback:
-                self._warned_fallback.add(account_id)
-                logger.warning(
-                    "account %r has no scoped WAHA key: the MCP server is using the shared "
-                    "admin key for it. Create one on the Accounts page, then set "
-                    "WAHA_REQUIRE_SCOPED_KEYS=true.",
-                    account_id,
-                )
-            return await self._client(session, "mcp", "admin-fallback", self._admin_key())
+            raise NoScopedKeyError(f"account {account_id!r} has no scoped WAHA key")
 
         # The ciphertext (not the secret) identifies the key: it changes on rotation.
         # Check the cache before decrypting — the common case (same key as last

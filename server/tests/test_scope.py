@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from cryptography.fernet import Fernet
 from fastmcp.exceptions import ToolError
 
 import botsapp.scope as scope_module
@@ -18,6 +19,7 @@ from botsapp.bridge_registry import BridgeRegistry, session_name_for
 from botsapp.db import DatabaseManager
 from botsapp.message_store import ChatNotAllowedError
 from botsapp.scope import resolve_scope
+from botsapp.secretbox import SecretBox
 
 ME, HER = "me@example.com", "her@example.com"
 
@@ -30,8 +32,14 @@ async def real_db(tmp_path) -> AsyncIterator[DatabaseManager]:
     await db.bootstrap(ME, "default")
     await db.add_user(HER)
     await db.add_account("hers", HER, session_name_for("hers"))
+    # Every account holds a read-only scoped key: the MCP side has no other way in.
+    box = SecretBox([Fernet.generate_key().decode()])
+    for account_id in ("default", "hers"):
+        await db.set_account_key(
+            account_id, f"key_{account_id}", box.encrypt("wk_s"), {"read": True}
+        )
     state.db = db
-    state.registry = BridgeRegistry(db, "http://waha:3000", "key")
+    state.registry = BridgeRegistry(db, "http://waha:3000", None, box=box)
     yield db
     await state.registry.close()
     await db.close()
@@ -127,10 +135,7 @@ async def test_scope_resolution_asks_for_the_mcp_key_not_the_admin_key(real_db, 
 async def test_a_missing_scoped_key_reads_as_not_ready_without_internals(
     real_db, monkeypatch, caplog
 ):
-    from botsapp.bridge_registry import BridgeRegistry
-
-    await state.registry.close()
-    state.registry = BridgeRegistry(real_db, "http://waha:3000", "ADMIN", require_scoped_keys=True)
+    await real_db.clear_account_key("hers")
     _as(monkeypatch, HER)
     with pytest.raises(ToolError) as excinfo:
         await resolve_scope(None)
@@ -145,16 +150,11 @@ async def test_a_missing_scoped_key_reads_as_not_ready_without_internals(
 async def _keyed_registry(real_db, **keys: dict[str, bool]) -> None:
     """Give accounts real (encrypted) keys with the given actions, and a registry
     that can open them."""
-    from cryptography.fernet import Fernet
-
-    from botsapp.bridge_registry import BridgeRegistry
-    from botsapp.secretbox import SecretBox
-
     box = SecretBox([Fernet.generate_key().decode()])
     for account_id, actions in keys.items():
         await real_db.set_account_key(account_id, f"key_{account_id}", box.encrypt("wk_s"), actions)
     await state.registry.close()
-    state.registry = BridgeRegistry(real_db, "http://waha:3000", "ADMIN", box=box)
+    state.registry = BridgeRegistry(real_db, "http://waha:3000", None, box=box)
 
 
 @pytest.fixture

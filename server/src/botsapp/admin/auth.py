@@ -15,7 +15,7 @@ and have not yet been exercised against a live environment.
 
 Route policy (``_policy``):
 
-* ``/users`` (and legacy ``/access``)           — admins only
+* ``/users``                                    — admins only
 * ``/accounts/create``, ``/accounts/*/delete``, ``/accounts/*/key/*`` — admins only
 * ``/`` (and legacy ``/accounts``), plus the rest of ``/accounts*`` (grant,
   revoke, select, session/*) — any user; handlers check that the account in
@@ -159,27 +159,16 @@ config: AdminAuthConfig | None = None
 
 def config_from_env() -> AdminAuthConfig:
     """Build the config from the environment, or raise with everything missing."""
-    # Two switches: LOCAL_DEV_DISABLE_AUTH (shared with the MCP server, for local
-    # dev) and ADMIN_DISABLE_AUTH (admin UI only — the explicit opt-out for a
-    # deployment where the admin UI is still reachable only over the private
-    # network and the login isn't configured yet). Deliberately not an
-    # implicit fallback: with login unconfigured and neither set, startup fails.
-    disabled_by = next(
-        (
-            name
-            for name in ("ADMIN_DISABLE_AUTH", "LOCAL_DEV_DISABLE_AUTH")
-            if os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
-        ),
-        None,
-    )
-    if disabled_by:
+    # LOCAL_DEV_DISABLE_AUTH (shared with the MCP server) is the one opt-out, for
+    # local development. Deliberately not an implicit fallback: with login
+    # unconfigured and it unset, startup fails.
+    if os.environ.get("LOCAL_DEV_DISABLE_AUTH", "").strip().lower() in ("1", "true", "yes"):
         dev_user = os.environ.get("BOTSAPP_ADMIN_EMAIL", "").strip().lower()
         if not dev_user:
-            raise RuntimeError(f"{disabled_by} needs BOTSAPP_ADMIN_EMAIL to act as")
+            raise RuntimeError("LOCAL_DEV_DISABLE_AUTH needs BOTSAPP_ADMIN_EMAIL to act as")
         logger.warning(
-            "%s is set — the admin UI has NO login and acts as %s. Only acceptable while "
-            "it is reachable by nobody but you.",
-            disabled_by,
+            "LOCAL_DEV_DISABLE_AUTH is set — the admin UI has NO login and acts as %s. "
+            "Never set this outside local development.",
             dev_user,
         )
         return AdminAuthConfig(client=None, secret=b"", base_url="", dev_user=dev_user)
@@ -267,7 +256,7 @@ def _safe_next(target: str | None) -> str:
 def _policy(path: str) -> str:
     if PREFIX and path.startswith(PREFIX):
         path = path[len(PREFIX) :] or "/"
-    if path.startswith(("/users", "/access")):
+    if path.startswith("/users"):
         return "admin"
     if path == "/accounts/create" or (path.startswith("/accounts/") and path.endswith("/delete")):
         return "admin"

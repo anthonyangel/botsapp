@@ -31,7 +31,6 @@ from fastmcp.exceptions import AuthorizationError, ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 import botsapp.state as state
-from botsapp.bridge_factory import scoped_keys_required
 from botsapp.capabilities import allows, required_actions, required_for
 from botsapp.scope import caller_email
 
@@ -56,9 +55,9 @@ async def _caller_accounts() -> list[dict[str, Any]]:
     return await state.db.list_accounts_for_user(email)
 
 
-def _servable(tags: Any, accounts: list[dict[str, Any]], strict: bool) -> bool:
+def _servable(tags: Any, accounts: list[dict[str, Any]]) -> bool:
     required = required_for(tags)
-    return not required or any(allows(a, required, strict=strict) for a in accounts)
+    return not required or any(allows(a, required) for a in accounts)
 
 
 class WahaScopeMiddleware(Middleware):
@@ -71,8 +70,7 @@ class WahaScopeMiddleware(Middleware):
         if _is_stdio():
             return tools
         accounts = await _caller_accounts()  # once per listing, not per tool
-        strict = scoped_keys_required()
-        return [t for t in tools if _servable(t.tags, accounts, strict)]
+        return [t for t in tools if _servable(t.tags, accounts)]
 
     async def on_call_tool(
         self,
@@ -92,7 +90,7 @@ class WahaScopeMiddleware(Middleware):
                 f"Authorization failed for tool '{name}': not found or not authorized"
             )
         required = required_for(tool.tags)
-        if required and not _servable(tool.tags, await _caller_accounts(), scoped_keys_required()):
+        if required and not _servable(tool.tags, await _caller_accounts()):
             raise AuthorizationError(
                 f"Authorization failed for tool '{name}': no account you can use allows it"
             )

@@ -203,14 +203,14 @@ async def create_account(request: Request) -> Response:
     if manager is None or not manager.can_store:
         return _ok(
             f"Created account '{account_id}' for {owner}, but no access key: BOTSAPP_SECRET_KEY "
-            "or the WAHA admin key isn't set here. Until one is created the MCP server "
-            "uses the shared key for it."
+            "or the WAHA admin key isn't set here. The MCP server can't use this account "
+            "until one is created."
         )
     try:
         await manager.provision(account_id)
     except KeyManagerError as exc:
         # Undo the session and the row: an account without its key would silently
-        # fall back to (or, in strict mode, be locked out of) the shared key.
+        # be locked out of the MCP server.
         try:
             await state.registry.delete_session(account_id)
         except Exception:
