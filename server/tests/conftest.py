@@ -20,14 +20,13 @@ import pytest  # noqa: E402
 
 import botsapp.state as state  # noqa: E402
 from botsapp.bridge import Bridge  # noqa: E402
-from botsapp.db import DatabaseManager  # noqa: E402
 from botsapp.message_store import MessageStore  # noqa: E402
-from botsapp.scope import Scope  # noqa: E402
+from botsapp.scope import Scope, ScopedChatDb  # noqa: E402
 
 
 @pytest.fixture
 def mock_db() -> AsyncMock:
-    mock = AsyncMock(spec=DatabaseManager)
+    mock = AsyncMock(spec=ScopedChatDb)
     # Every tool that reads chat/group state checks the allowlist first;
     # default to "everything allowed" so existing tests don't all need to
     # know about it. Tests that care about the allowlist override this.
@@ -79,7 +78,6 @@ def _patch_state(
     resolution is covered in test_scope.py, which undoes this patch.
     """
     state.db = mock_db
-    state.bridge = mock_bridge
 
     async def _fake_resolve_scope(account: str | None = None) -> Scope:
         return Scope(
@@ -93,5 +91,4 @@ def _patch_state(
     monkeypatch.setattr("botsapp.tools.resolve_scope", _fake_resolve_scope)
     yield
     state.db = None
-    state.bridge = None
     state.registry = None

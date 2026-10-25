@@ -77,12 +77,12 @@ def client(monkeypatch, stub):
     holders = {ADMIN, OWNER, GUEST}  # STRANGER has no user row
 
     with TestClient(admin_app.app, base_url=BASE, follow_redirects=False) as c:
-        state.bridge = AsyncMock()
-        state.bridge.get_session_status.return_value = AsyncMock()
-        state.bridge.list_groups.return_value = []
-        state.bridge.get_contacts.return_value = []
-        state.bridge.get_avatar_url.return_value = None
-        state.bridge.get_chats.return_value = []
+        bridge = AsyncMock()
+        bridge.get_session_status.return_value = AsyncMock()
+        bridge.list_groups.return_value = []
+        bridge.get_contacts.return_value = []
+        bridge.get_avatar_url.return_value = None
+        bridge.get_chats.return_value = []
         state.db.get_user = AsyncMock(side_effect=lambda e: users.get(e))
         primary = {"id": "default", "label": "Primary", "owner_email": OWNER}
         state.db.list_accounts = AsyncMock(return_value=[primary])
@@ -95,16 +95,17 @@ def client(monkeypatch, stub):
         )
 
         assert state.registry is not None
-        state.registry.for_account = AsyncMock(return_value=state.bridge)
+        state.registry.for_account = AsyncMock(return_value=bridge)
 
         async def _bridge(_request):
-            return state.bridge
+            return bridge
 
         monkeypatch.setattr(admin_app, "_bridge", _bridge)
         state.db.list_users = AsyncMock(return_value=[])
         state.db.add_user = AsyncMock()
         state.db.remove_user = AsyncMock()
         c.cfg = cfg
+        c.bridge = bridge
         yield c
 
 
@@ -270,12 +271,6 @@ def test_revoked_user_loses_access_on_the_next_request(client):
     assert client.get("/chats").status_code == 403
 
 
-def test_legacy_access_path_redirects_to_users(client):
-    _sign_in(client, ADMIN)
-    r = client.get("/access")
-    assert r.status_code == 308 and r.headers["location"] == "/users"
-
-
 # ── CSRF ─────────────────────────────────────────────────────────────────────
 
 
@@ -314,7 +309,6 @@ def _clear(monkeypatch):
     for k in (
         *_LOGIN_ENV,
         "LOCAL_DEV_DISABLE_AUTH",
-        "ADMIN_DISABLE_AUTH",
         "BOTSAPP_ADMIN_EMAIL",
         "WORKOS_ORG_ID",
     ):
@@ -346,10 +340,9 @@ def test_config_builds_from_env(monkeypatch):
     assert cfg.organization_id == "org_1" and cfg.secure_cookies and cfg.dev_user is None
 
 
-@pytest.mark.parametrize("flag", ["LOCAL_DEV_DISABLE_AUTH", "ADMIN_DISABLE_AUTH"])
-def test_dev_mode_needs_an_identity_and_skips_login(monkeypatch, flag):
+def test_dev_mode_needs_an_identity_and_skips_login(monkeypatch):
     _clear(monkeypatch)
-    monkeypatch.setenv(flag, "1")
+    monkeypatch.setenv("LOCAL_DEV_DISABLE_AUTH", "1")
     with pytest.raises(RuntimeError, match="BOTSAPP_ADMIN_EMAIL"):
         auth.config_from_env()
     monkeypatch.setenv("BOTSAPP_ADMIN_EMAIL", "Dev@Example.com")

@@ -50,7 +50,7 @@ Fly binds loopback-only instead of the public interface.
   stored keys, WAHA key parsing + the `KeyApi` protocol, and `KeyManager`
   (provision/rotate/verify/revoke: change WAHA, read it back, then record). The registry
   takes a required `purpose` (`"mcp"` = the account's scoped key, `"admin"` = the admin
-  key) and fails closed under `WAHA_REQUIRE_SCOPED_KEYS`.
+  key) and fails closed for an account with no scoped key (no admin-key fallback).
 - `capabilities.py` / `tool_scopes.py` — tool visibility from key scopes
   ([0027](../docs/decisions/0027-scoped-waha-session-keys.md)): a tool's WAHA-action tags
   (`read`, `send`, ...) are what it needs; `WahaScopeMiddleware` hides and refuses tools no
@@ -60,13 +60,12 @@ Fly binds loopback-only instead of the public interface.
   account → `Scope(bridge, ScopedChatDb, AllowlistedMessageStore)` bound to that
   (account, viewer). Every reachable tool must start with it; never read
   allowlist/tags straight from `state.db`.
-- `bridge_factory.py` — `build_bridge_and_store()`, the one place that
-  constructs the bridge; both `app.py` and `admin/app.py` call it so
-  construction can't drift between the two processes. One `WAHAClient`
-  instance satisfies both the `Bridge` and `MessageStore` protocols.
+- `bridge_factory.py` — `build_registry()`, the one place that constructs the
+  `BridgeRegistry`; both `app.py` and `admin/app.py` call it so construction can't
+  drift between the two processes. One `WAHAClient` instance satisfies both the
+  `Bridge` and `MessageStore` protocols.
 - `db.py` — `DatabaseManager`, SQLite (`aiosqlite`) for users, accounts, grants and
-  per-(account, viewer) `chat_access` (tags + `is_allowed`); legacy
-  `chat_metadata`/`allowed_emails` are no longer read — not chat/message history, that's
+  per-(account, viewer) `chat_access` (tags + `is_allowed`) — not chat/message history, that's
   `MessageStore`'s job. Shared file, WAL mode, read by both processes
   ([0007](../docs/decisions/0007-sqlite-for-metadata-store.md)).
 - `session.py` — WhatsApp session/QR pairing logic, called from both
@@ -79,13 +78,13 @@ Fly binds loopback-only instead of the public interface.
   unreachable **by construction** — not by leaving them unregistered. Adding
   a new tool that sends/edits/deletes/manages groups: tag it `"outbound"` or
   it will actually be callable.
-- `app.py` — FastMCP instance, lifespan (constructs bridge + `DatabaseManager`
+- `app.py` — FastMCP instance, lifespan (constructs `DatabaseManager` + registry
   into `state`), `AuthKitProvider` wiring, the email-allowlist gate
   (`allowed_family_email` — DB-backed via `state.db.is_email_allowed`, not an
   env var, see [0015](../docs/decisions/0015-email-allowlist-in-db.md)),
   `LOCAL_DEV_DISABLE_AUTH` escape hatch (dev only — does *not* relax the
   outbound-tag block).
-- `state.py` — module-level globals (`db`, `bridge`, `registry`, `admin_chat_db`)
+- `state.py` — module-level globals (`db`, `registry`, `key_manager`)
   set up in `app.py`'s lifespan; tools read through this rather than a
   request-scoped context.
 - `_authkit_issuer_workaround.py` — works around the open bug in
@@ -112,7 +111,7 @@ Fly binds loopback-only instead of the public interface.
   Don't reach for `aioresponses` in new tests.
 - `pyproject.toml`'s `[[tool.ty.overrides]]` relaxes `unresolved-attribute`/
   `invalid-assignment` for `tests/**` only — deliberate, documented there:
-  tests monkeypatch `Optional`-typed module globals (`state.db`, `state.bridge`)
+  tests monkeypatch `Optional`-typed module globals (`state.db`, `state.registry`)
   with `AsyncMock`s and read them back via `.return_value`/`.assert_awaited_once_with`,
   which `ty` can't flow-narrow across a module-attribute boundary. Don't
   "fix" this by adding `assert x is not None` at every call site or loosening

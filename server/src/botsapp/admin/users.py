@@ -22,7 +22,7 @@ so first-time setup can't lock the owner out.
 There is deliberately no "last administrator" guard: the caller must be an admin
 and cannot target themselves, so at least one admin always remains.
 
-Without a directory (dev, or the private ``ADMIN_DISABLE_AUTH`` setup) the page
+Without a directory (local dev) the page
 edits only the local table and says so.
 """
 

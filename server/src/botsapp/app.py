@@ -20,9 +20,7 @@ from mcp.types import Icon
 import botsapp.state as state
 from botsapp.bridge_factory import (
     bridge_provider_name,
-    build_bridge_and_store,
     build_registry,
-    scoped_keys_required,
 )
 from botsapp.db import DatabaseManager
 from botsapp.secretbox import SecretBox
@@ -106,34 +104,26 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
         )
 
     box = SecretBox.from_env()  # raises if BOTSAPP_SECRET_KEY is malformed
-    if scoped_keys_required() and box is None:
-        raise RuntimeError(
-            "WAHA_REQUIRE_SCOPED_KEYS needs BOTSAPP_SECRET_KEY to open the stored keys"
-        )
-
-    # state.bridge is the default-session bridge on the admin key, used only by
-    # the permanently blocked outbound tools. It is skipped when the admin key
-    # has been withheld from this process (strict mode); everything reachable
-    # resolves a per-account, per-viewer view through state.registry (scope.py),
-    # on that account's own scoped key.
-    if os.environ.get("WAHA_API_KEY"):
-        bridge, _ = build_bridge_and_store()
-        state.bridge = bridge
+    if box is None:
+        raise RuntimeError("BOTSAPP_SECRET_KEY is required to open the stored WAHA keys")
+    # Everything reachable resolves a per-account, per-viewer view through
+    # state.registry (scope.py), on that account's own scoped key.
     state.registry = build_registry(state.db, box)
     unkeyed = [a["id"] for a in await state.db.list_accounts() if not a["waha_key_id"]]
     if unkeyed:
-        logger.warning("accounts without a scoped WAHA key: %s", ", ".join(unkeyed))
+        logger.warning(
+            "accounts without a scoped WAHA key are unreachable until one is created "
+            "on the admin Session page: %s",
+            ", ".join(unkeyed),
+        )
     logger.info("Bridge ready (%s)", bridge_provider_name())
 
     yield
 
-    if state.bridge is not None:
-        await state.bridge.close()
     await state.registry.close()
     await state.db.close()
     state.db = None
     state.registry = None
-    state.bridge = None
     logger.info("Shutdown complete")
 
 

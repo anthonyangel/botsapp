@@ -3,7 +3,7 @@ Admin UI Starlette app.
 
 Runs as its own process (botsapp.admin_main:app), independent of the
 public MCP server (botsapp.main:app) — they share only the SQLite
-chat_metadata database and WAHA's own storage, never a Python process.
+metadata database and WAHA's own storage, never a Python process.
 Every route except the login ones sits behind admin/auth.py's AuthKit login
 (docs/decisions/0026); only LOCAL_DEV_DISABLE_AUTH turns that off, for local
 development. Until the per-account pages land (#51) these pages operate on the
@@ -468,11 +468,6 @@ async def save_metadata(request: Request) -> Response:
     return _redirect_to_tab(jid)
 
 
-async def access_redirect(_request: Request) -> Response:
-    """The old Access tab lives on as /users (docs/decisions/0026)."""
-    return RedirectResponse(url=p("/users"), status_code=308)
-
-
 app = Starlette(
     routes=[
         Route(p("/"), accounts.session_index),
@@ -483,7 +478,6 @@ app = Starlette(
         Route(p("/users/invite"), users.invite_user, methods=["POST"]),
         Route(p("/users/{email}/role"), users.change_role, methods=["POST"]),
         Route(p("/users/{email}/remove"), users.remove_user, methods=["POST"]),
-        Route(p("/access"), access_redirect),
         Route(p("/accounts"), accounts.accounts_redirect),
         Route(p("/accounts/create"), accounts.create_account, methods=["POST"]),
         Route(p("/accounts/{account_id}/select"), accounts.select_account, methods=["POST"]),

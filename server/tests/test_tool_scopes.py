@@ -58,21 +58,18 @@ def test_only_wahas_own_labels_count_as_requirements():
 
 
 def test_a_keyed_account_has_exactly_its_stored_actions():
-    assert account_actions(_keyed("a", READ_ONLY), strict=False) == {"read"}
-    assert allows(_keyed("a", READ_ONLY), frozenset({"read"}), strict=True)
-    assert not allows(_keyed("a", READ_ONLY), frozenset({"send"}), strict=False)
-    assert missing(_keyed("a", READ_ONLY), frozenset({"read", "send"}), strict=False) == ["send"]
+    assert account_actions(_keyed("a", READ_ONLY)) == {"read"}
+    assert allows(_keyed("a", READ_ONLY), frozenset({"read"}))
+    assert not allows(_keyed("a", READ_ONLY), frozenset({"send"}))
+    assert missing(_keyed("a", READ_ONLY), frozenset({"read", "send"})) == ["send"]
 
 
-def test_an_unkeyed_account_uses_the_admin_key_unless_keys_are_required():
-    assert account_actions(_unkeyed("a"), strict=False) == frozenset(WAHA_ACTIONS)
-    assert account_actions(_unkeyed("a"), strict=True) == frozenset()
+def test_an_unkeyed_account_has_no_actions():
+    assert account_actions(_unkeyed("a")) == frozenset()
 
 
 def test_a_key_row_with_no_recorded_actions_allows_nothing():
-    assert (
-        account_actions({"waha_key_id": "k", "waha_key_actions": None}, strict=False) == frozenset()
-    )
+    assert account_actions({"waha_key_id": "k", "waha_key_actions": None}) == frozenset()
 
 
 # ── listing ──────────────────────────────────────────────────────────────────
@@ -98,7 +95,6 @@ def caller(monkeypatch, mock_db):
 @pytest.fixture(autouse=True)
 def _not_stdio(monkeypatch):
     monkeypatch.setattr("botsapp.tool_scopes._is_stdio", lambda: False)
-    monkeypatch.delenv("WAHA_REQUIRE_SCOPED_KEYS", raising=False)
 
 
 async def _listed(middleware: WahaScopeMiddleware, *tools) -> list[str]:
@@ -132,15 +128,7 @@ async def test_no_accounts_means_no_whatsapp_tools(middleware, caller):
     assert await _listed(middleware, READ_TOOL, LOCAL_TOOL) == ["list_accounts"]
 
 
-async def test_an_unkeyed_account_is_served_by_the_admin_key_in_the_transition(middleware, caller):
-    caller(_unkeyed("a"))
-    assert await _listed(middleware, READ_TOOL) == ["list_chats"]
-
-
-async def test_an_unkeyed_account_has_nothing_when_keys_are_required(
-    middleware, caller, monkeypatch
-):
-    monkeypatch.setenv("WAHA_REQUIRE_SCOPED_KEYS", "true")
+async def test_an_unkeyed_account_has_nothing(middleware, caller):
     caller(_unkeyed("a"))
     assert await _listed(middleware, READ_TOOL, LOCAL_TOOL) == ["list_accounts"]
 

@@ -8,8 +8,7 @@ effect, and a tool with none of the six needs nothing from WAHA, as for the tool
 that only touch our own database.
 
 An account's actions are the ones its stored key allows. An account with no key
-uses the shared admin key (the transition, see ``BridgeRegistry``), which allows
-everything, unless keys are required, when it allows nothing.
+allows nothing: the MCP server has no fallback to the shared admin key.
 """
 
 from __future__ import annotations
@@ -20,8 +19,6 @@ from typing import Any
 
 from botsapp.waha_keys import WAHA_ACTIONS
 
-_ALL = frozenset(WAHA_ACTIONS)
-
 # Set per tool call by the middleware (tool_scopes.py) so ``resolve_scope`` can
 # check the specific account the call is about; empty means no requirement.
 required_actions: ContextVar[frozenset[str]] = ContextVar(
@@ -31,20 +28,20 @@ required_actions: ContextVar[frozenset[str]] = ContextVar(
 
 def required_for(tags: Iterable[str]) -> frozenset[str]:
     """The WAHA actions a tool needs: its tags that are WAHA action names."""
-    return frozenset(tags) & _ALL
+    return frozenset(tags) & frozenset(WAHA_ACTIONS)
 
 
-def account_actions(account: Mapping[str, Any], *, strict: bool) -> frozenset[str]:
+def account_actions(account: Mapping[str, Any]) -> frozenset[str]:
     """The WAHA actions available for an account, from its stored key."""
     if account.get("waha_key_id"):
         stored = account.get("waha_key_actions") or {}
         return frozenset(name for name, allowed in stored.items() if allowed)
-    return frozenset() if strict else _ALL
+    return frozenset()
 
 
-def allows(account: Mapping[str, Any], required: frozenset[str], *, strict: bool) -> bool:
-    return required <= account_actions(account, strict=strict)
+def allows(account: Mapping[str, Any], required: frozenset[str]) -> bool:
+    return required <= account_actions(account)
 
 
-def missing(account: Mapping[str, Any], required: frozenset[str], *, strict: bool) -> list[str]:
-    return sorted(required - account_actions(account, strict=strict))
+def missing(account: Mapping[str, Any], required: frozenset[str]) -> list[str]:
+    return sorted(required - account_actions(account))

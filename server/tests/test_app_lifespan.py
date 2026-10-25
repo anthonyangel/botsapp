@@ -1,4 +1,4 @@
-"""The MCP server's startup rules around scoped WAHA keys (0027)."""
+"""The MCP server's startup rules around scoped WAHA keys (0027, 0030)."""
 
 import pytest
 from cryptography.fernet import Fernet
@@ -6,20 +6,21 @@ from cryptography.fernet import Fernet
 import botsapp.state as state
 from botsapp.app import lifespan, mcp
 
+SECRET = Fernet.generate_key().decode()
+
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", str(tmp_path / "life.db"))
     monkeypatch.setenv("WAHA_URL", "http://waha.invalid")
     monkeypatch.delenv("BOTSAPP_ADMIN_EMAIL", raising=False)
-    for name in ("WAHA_API_KEY", "WAHA_REQUIRE_SCOPED_KEYS", "BOTSAPP_SECRET_KEY"):
+    for name in ("WAHA_API_KEY", "BOTSAPP_SECRET_KEY"):
         monkeypatch.delenv(name, raising=False)
     # the autouse fixture installs mocks; the lifespan sets its own
-    state.db = state.bridge = state.registry = None
+    state.db = state.registry = None
 
 
-async def test_strict_mode_without_a_master_key_refuses_to_start(env, monkeypatch):
-    monkeypatch.setenv("WAHA_REQUIRE_SCOPED_KEYS", "true")
+async def test_without_a_master_key_refuses_to_start(env):
     with pytest.raises(RuntimeError, match="BOTSAPP_SECRET_KEY"):
         async with lifespan(mcp):
             pass
@@ -34,32 +35,24 @@ async def test_a_malformed_master_key_refuses_to_start(env, monkeypatch):
             pass
 
 
-async def test_strict_mode_starts_without_the_admin_key_and_has_no_default_bridge(env, monkeypatch):
-    monkeypatch.setenv("WAHA_REQUIRE_SCOPED_KEYS", "true")
+async def test_starts_without_the_admin_key(env, monkeypatch):
     monkeypatch.setenv("BOTSAPP_SECRET_KEY", Fernet.generate_key().decode())
     async with lifespan(mcp):
-        assert state.bridge is None  # the blocked outbound tools have nothing to use
         assert state.registry is not None
     assert state.registry is None
 
 
-async def test_with_the_admin_key_the_default_bridge_still_exists(env, monkeypatch):
-    monkeypatch.setenv("WAHA_API_KEY", "ADMIN")
-    async with lifespan(mcp):
-        assert state.bridge is not None and state.registry is not None
-
-
 async def test_accounts_without_keys_are_logged_at_startup(env, monkeypatch, caplog):
-    monkeypatch.setenv("WAHA_API_KEY", "ADMIN")
+    monkeypatch.setenv("BOTSAPP_SECRET_KEY", SECRET)
     monkeypatch.setenv("BOTSAPP_ADMIN_EMAIL", "me@example.com")
     with caplog.at_level("WARNING"):
         async with lifespan(mcp):
             pass
-    assert "accounts without a scoped WAHA key: default" in caplog.text
+    assert "accounts without a scoped WAHA key" in caplog.text and "default" in caplog.text
 
 
 async def test_an_unconfigured_owner_is_called_out_loudly_at_startup(env, monkeypatch, caplog):
-    monkeypatch.setenv("WAHA_API_KEY", "ADMIN")
+    monkeypatch.setenv("BOTSAPP_SECRET_KEY", SECRET)
     with caplog.at_level("ERROR"):
         async with lifespan(mcp):
             pass
@@ -67,7 +60,7 @@ async def test_an_unconfigured_owner_is_called_out_loudly_at_startup(env, monkey
 
 
 async def test_no_startup_error_once_an_account_exists(env, monkeypatch, caplog):
-    monkeypatch.setenv("WAHA_API_KEY", "ADMIN")
+    monkeypatch.setenv("BOTSAPP_SECRET_KEY", SECRET)
     monkeypatch.setenv("BOTSAPP_ADMIN_EMAIL", "me@example.com")
     with caplog.at_level("ERROR"):
         async with lifespan(mcp):

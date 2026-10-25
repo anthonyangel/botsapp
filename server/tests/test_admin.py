@@ -1,6 +1,6 @@
 """
 Route tests for the admin UI (botsapp.admin.app). Bridge-agnostic:
-state.bridge is mocked against bridge.Bridge, same as test_tools.py, so
+bridge is mocked against bridge.Bridge, same as test_tools.py, so
 these tests never assume a concrete client.
 
 Bypasses the real lifespan's DB/bridge connections (no SQLite file or live
@@ -51,11 +51,11 @@ def client(monkeypatch):
         # Replace the real bridge the lifespan built with a mock, and give
         # the module its own fake unfiltered store — same idea as
         # conftest.py's _patch_state, scoped to this app instead.
-        state.bridge = AsyncMock()
-        state.bridge.get_session_status.return_value = _LOGGED_IN_STATUS
-        state.bridge.get_contacts.return_value = []
-        state.bridge.list_groups.return_value = []
-        state.bridge.get_avatar_url.return_value = None
+        bridge = AsyncMock()
+        bridge.get_session_status.return_value = _LOGGED_IN_STATUS
+        bridge.get_contacts.return_value = []
+        bridge.list_groups.return_value = []
+        bridge.get_avatar_url.return_value = None
         # Sign in as an admin who owns the default account (auth is covered
         # in test_admin_auth.py); chat_db stands in for the per-viewer handle.
         state.db.get_user = AsyncMock(return_value={"email": "admin@example.com", "is_admin": True})
@@ -73,11 +73,11 @@ def client(monkeypatch):
         state.db.list_grants = AsyncMock(return_value=[])
 
         async def _bridge(_request):
-            return state.bridge
+            return bridge
 
         monkeypatch.setattr(admin_app, "_bridge", _bridge)
         assert state.registry is not None
-        state.registry.for_account = AsyncMock(return_value=state.bridge)
+        state.registry.for_account = AsyncMock(return_value=bridge)
         chat_db = AsyncMock()
         chat_db.get_chat_metadata.return_value = None
         monkeypatch.setattr(admin_app, "_chat_db", lambda _request, _viewer=None: chat_db)
@@ -86,12 +86,13 @@ def client(monkeypatch):
         # docstring) — reset between tests so one test's community jid
         # can't leak into the next's redirect-tab lookup.
         admin_app._community_jids.clear()
-        state.bridge.get_chats.return_value = []
+        bridge.get_chats.return_value = []
+        c.bridge = bridge
         yield c
 
 
 def test_session_page_shows_qr_when_not_logged_in(client):
-    state.bridge.get_session_status.return_value = SessionStatus(
+    client.bridge.get_session_status.return_value = SessionStatus(
         connected=True, logged_in=False, qr_code="data:image/png;base64,AAAA"
     )
     r = client.get("/")
@@ -111,7 +112,7 @@ def test_session_page_shows_active_bridge(client):
 
 
 def test_session_page_shows_connect_button_when_never_attempted(client):
-    state.bridge.get_session_status.return_value = SessionStatus(connected=False, logged_in=False)
+    client.bridge.get_session_status.return_value = SessionStatus(connected=False, logged_in=False)
     r = client.get("/")
     assert r.status_code == 200
     assert "Connect WhatsApp" in r.text
@@ -122,17 +123,17 @@ def test_loading_session_page_never_triggers_connect(client):
     # re-issued a fresh QR (and killed the bridge's channel for whatever QR
     # was already mid-scan) on every single page load/refresh — the actual
     # cause of "QR linking isn't working". / must only ever poll status.
-    state.bridge.get_session_status.return_value = SessionStatus(
+    client.bridge.get_session_status.return_value = SessionStatus(
         connected=True, logged_in=False, qr_code="data:image/png;base64,AAAA"
     )
     client.get("/")
     client.get("/")
     client.get("/")
-    state.bridge.connect.assert_not_awaited()
+    client.bridge.connect.assert_not_awaited()
 
 
 def test_session_status_json_reflects_current_state(client):
-    state.bridge.get_session_status.return_value = SessionStatus(
+    client.bridge.get_session_status.return_value = SessionStatus(
         connected=True, logged_in=False, qr_code="data:image/png;base64,AAAA"
     )
     r = client.get("/accounts/default/session/status.json")
@@ -140,13 +141,13 @@ def test_session_status_json_reflects_current_state(client):
     body = r.json()
     assert body["logged_in"] is False
     assert body["qr_code"] == "data:image/png;base64,AAAA"
-    state.bridge.connect.assert_not_awaited()
+    client.bridge.connect.assert_not_awaited()
 
 
 def test_session_status_json_reports_unreachable_bridge_as_error(client):
     # A well-behaved Bridge.get_session_status() never raises (see
     # WAHAClient) — it's already captured in .errors.
-    state.bridge.get_session_status.return_value = SessionStatus(
+    client.bridge.get_session_status.return_value = SessionStatus(
         errors=["Cannot reach the bridge: no route to host"]
     )
     r = client.get("/accounts/default/session/status.json")
@@ -155,29 +156,29 @@ def test_session_status_json_reports_unreachable_bridge_as_error(client):
 
 
 def test_connect_button_triggers_the_actual_connect_attempt(client):
-    state.bridge.get_session_status.return_value = SessionStatus(connected=False, logged_in=False)
-    state.bridge.connect.return_value = SessionStatus(connected=True, logged_in=False, qr_code="x")
+    client.bridge.get_session_status.return_value = SessionStatus(connected=False, logged_in=False)
+    client.bridge.connect.return_value = SessionStatus(connected=True, logged_in=False, qr_code="x")
     r = client.post("/accounts/default/session/connect", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/"
-    state.bridge.connect.assert_awaited_once()
+    client.bridge.connect.assert_awaited_once()
 
 
 def test_chats_page_shows_not_connected_state_when_logged_out(client):
-    state.bridge.get_session_status.return_value = SessionStatus(connected=False, logged_in=False)
+    client.bridge.get_session_status.return_value = SessionStatus(connected=False, logged_in=False)
     r = client.get("/chats")
     assert r.status_code == 200
     assert "isn't connected" in r.text
     # Shouldn't even try to enrich chat/group data if there's nothing to show.
-    state.bridge.get_contacts.assert_not_awaited()
-    state.bridge.list_groups.assert_not_awaited()
+    client.bridge.get_contacts.assert_not_awaited()
+    client.bridge.list_groups.assert_not_awaited()
 
 
 def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "155@s.whatsapp.net", "name": "155"},
     ]
-    state.bridge.get_contacts.return_value = [
+    client.bridge.get_contacts.return_value = [
         ContactInfo(jid="155@s.whatsapp.net", name="Bob Smith", phone_number="155"),
     ]
     client.chat_db.get_chat_metadata.return_value = {"is_allowed": True, "tags": ["family"]}
@@ -190,8 +191,8 @@ def test_chats_page_lists_direct_chats_with_contact_name_and_metadata(client):
 def test_chats_page_lists_groups_from_live_bridge_list_even_without_history(client):
     # No message history for this group at all — still must appear, since
     # you should be able to allow a group before it's ever posted anything.
-    state.bridge.get_chats.return_value = []
-    state.bridge.list_groups.return_value = [
+    client.bridge.get_chats.return_value = []
+    client.bridge.list_groups.return_value = [
         GroupInfo(
             jid="g1@g.us",
             name="Family Group",
@@ -213,7 +214,7 @@ def test_chats_page_splits_communities_into_their_own_tab(client):
     # but its own participant count is meaningless (just its admins, not
     # real membership — see _community_row's docstring) — it gets its own
     # tab, not a badge bolted onto the Groups table.
-    state.bridge.list_groups.return_value = [
+    client.bridge.list_groups.return_value = [
         GroupInfo(jid="g1@g.us", name="Community HQ", is_community=True, participant_count=1),
         GroupInfo(jid="g2@g.us", name="Regular Group", is_community=False, participant_count=5),
     ]
@@ -240,11 +241,11 @@ def test_chats_page_shows_groups_loaded_gap(client):
     # know about far more group *chats* (every real group jid ends
     # "@g.us") than it has full group metadata for. Surface the gap
     # instead of silently under-showing.
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "g1@g.us", "name": "g1"},
         {"jid": "g2@g.us", "name": "g2"},  # no metadata from list_groups()
     ]
-    state.bridge.list_groups.return_value = [
+    client.bridge.list_groups.return_value = [
         GroupInfo(jid="g1@g.us", name="Group One"),
     ]
     r = client.get("/chats")
@@ -255,12 +256,12 @@ def test_groups_tab_is_ordered_by_chat_activity_not_list_groups_order(client):
     # list_groups() itself carries no order; the chats list (get_chats)
     # does, newest-activity first — reuse that ordering for the groups tab
     # instead of whatever list_groups() happened to return them in.
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "newest@g.us", "name": "newest"},
         {"jid": "middle@g.us", "name": "middle"},
         {"jid": "oldest@g.us", "name": "oldest"},
     ]
-    state.bridge.list_groups.return_value = [
+    client.bridge.list_groups.return_value = [
         GroupInfo(jid="oldest@g.us", name="Oldest Group"),
         GroupInfo(jid="newest@g.us", name="Newest Group"),
         GroupInfo(jid="middle@g.us", name="Middle Group"),
@@ -271,10 +272,10 @@ def test_groups_tab_is_ordered_by_chat_activity_not_list_groups_order(client):
 
 
 def test_groups_with_no_chat_history_sort_after_active_ones(client):
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "active@g.us", "name": "active"},
     ]
-    state.bridge.list_groups.return_value = [
+    client.bridge.list_groups.return_value = [
         GroupInfo(jid="never-messaged@g.us", name="Quiet Group"),
         GroupInfo(jid="active@g.us", name="Active Group"),
     ]
@@ -283,10 +284,10 @@ def test_groups_with_no_chat_history_sort_after_active_ones(client):
 
 
 def test_chats_page_hides_groups_loaded_note_once_caught_up(client):
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "g1@g.us", "name": "g1"},
     ]
-    state.bridge.list_groups.return_value = [
+    client.bridge.list_groups.return_value = [
         GroupInfo(jid="g1@g.us", name="Group One"),
     ]
     r = client.get("/chats")
@@ -303,7 +304,7 @@ def test_chats_page_hides_status_tab_when_never_seen(client):
 
 
 def test_chats_page_shows_status_tab_when_seen(client):
-    state.bridge.get_chats.return_value = [{"jid": "status@broadcast", "name": ""}]
+    client.bridge.get_chats.return_value = [{"jid": "status@broadcast", "name": ""}]
     r = client.get("/chats")
     assert "Status/Stories" in r.text
     assert ">Status<" in r.text
@@ -312,7 +313,7 @@ def test_chats_page_shows_status_tab_when_seen(client):
 def test_chats_page_separates_newsletters_into_their_own_tab(client):
     # @newsletter (WhatsApp Channels) jids must not be lumped into the
     # direct-chats tab — they get their own, alongside Chats/Groups.
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "123@newsletter", "name": "Tech News"},
         {"jid": "155@s.whatsapp.net", "name": "155"},
     ]
@@ -324,7 +325,7 @@ def test_chats_page_separates_newsletters_into_their_own_tab(client):
 
 
 def test_chats_page_shows_country_flag_for_direct_chat(client):
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "972501234567@s.whatsapp.net", "name": "972501234567"},
     ]
     r = client.get("/chats")
@@ -334,7 +335,7 @@ def test_chats_page_shows_country_flag_for_direct_chat(client):
 
 def test_chats_page_omits_country_flag_for_unresolvable_jid(client):
     # An @lid contact never resolved to a phone jid — no crash, just no flag.
-    state.bridge.get_chats.return_value = [
+    client.bridge.get_chats.return_value = [
         {"jid": "12345@lid", "name": "Mystery"},
     ]
     r = client.get("/chats")
@@ -375,7 +376,7 @@ def test_toggle_allowed_redirects_to_community_tab(client):
     # _classify() can't tell a community from an ordinary group on jid
     # alone (both end "@g.us") — a prior /chats load must have populated
     # _community_jids for this redirect to land on the right tab.
-    state.bridge.list_groups.return_value = [
+    client.bridge.list_groups.return_value = [
         GroupInfo(jid="g1@g.us", name="Community HQ", is_community=True),
     ]
     client.get("/chats")
