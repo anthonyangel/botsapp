@@ -219,17 +219,17 @@ def test_chats_page_splits_communities_into_their_own_tab(client):
     ]
     r = client.get("/chats")
     assert r.status_code == 200
-    assert "#community-panel" in r.text
+    assert 'panel="community-panel"' in r.text
     assert ">Communities<" in r.text
 
-    community_start = r.text.index('id="community-panel"')
-    community_end = r.text.index('id="newsletter-panel"')
+    community_start = r.text.index('name="community-panel"')
+    community_end = r.text.index('name="newsletter-panel"')
     community_section = r.text[community_start:community_end]
     assert "Community HQ" in community_section
     assert "Regular Group" not in community_section
     assert ">Members<" not in community_section  # no member-count column at all
 
-    groups_section = r.text[r.text.index('id="groups-panel"') : community_start]
+    groups_section = r.text[r.text.index('name="groups-panel"') : community_start]
     assert "Regular Group" in groups_section
     assert "5 members" in groups_section
     assert "Community HQ" not in groups_section
@@ -298,7 +298,7 @@ def test_chats_page_hides_status_tab_when_never_seen(client):
     # chat at all — nothing to toggle, so the tab is omitted entirely
     # rather than showing a dead "nothing here" panel.
     r = client.get("/chats")
-    assert "#status-panel" not in r.text
+    assert 'panel="status-panel"' not in r.text
     assert ">Status<" not in r.text
 
 
@@ -319,7 +319,7 @@ def test_chats_page_separates_newsletters_into_their_own_tab(client):
     r = client.get("/chats")
     assert r.status_code == 200
     assert "Tech News" in r.text
-    assert "#newsletter-panel" in r.text
+    assert 'panel="newsletter-panel"' in r.text
     assert ">Newsletters<" in r.text
 
 

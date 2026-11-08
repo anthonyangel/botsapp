@@ -266,7 +266,7 @@ async def test_admin_sees_every_account_and_the_create_form(client, people):
     await state.db.add_account("sam", SAM, "acct-sam", label="Sam's phone")
     _as(client, ADMIN)
     page = client.get("/").text
-    assert "Sam&#x27;s phone" in page and "New account" in page and "connected" in page
+    assert "Sam&#x27;s phone" in page and "New account" in page and "Connected" in page
 
 
 async def test_labels_and_emails_are_escaped(client, people):
