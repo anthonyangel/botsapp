@@ -315,6 +315,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         selectable = await state.db.list_accounts() if user["is_admin"] else mine
         account_id = _resolve_account(request, email, mine, selectable)
         if policy == "member" and account_id not in {a["id"] for a in mine}:
+            if account_id is not None and user["is_admin"]:
+                return _denied(
+                    403,
+                    f"You can administer the '{account_id}' account but don't hold it, so its "
+                    "chats aren't yours to view. Chats opens only for an account you own or "
+                    "were shared; pick one of those in the header, or ask its owner to share it.",
+                )
             return _denied(403, "You don't have access to a WhatsApp account.")
 
         request.state.user = user
