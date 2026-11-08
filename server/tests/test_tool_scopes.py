@@ -292,3 +292,46 @@ async def test_the_hooks_fire_in_a_real_server_and_the_actions_reach_the_tool(ca
         assert (await client.call_tool("local", {})).data == []
         with pytest.raises(ToolError):
             await client.call_tool("sends", {})  # hidden tools can't be called either
+
+
+# ── telling connected clients (#58) ──────────────────────────────────────────
+
+
+async def test_a_connected_client_is_told_when_its_tool_list_goes_stale(caller):
+    from fastmcp import Client, FastMCP
+    from fastmcp.client.messages import MessageHandler
+
+    class Changes(MessageHandler):
+        def __init__(self) -> None:
+            self.count: int = 0
+
+        async def on_tool_list_changed(self, message: Any) -> None:  # noqa: ARG002
+            self.count += 1
+
+    server = FastMCP("scoped", middleware=[WahaScopeMiddleware()])
+
+    @server.tool(tags={"local"})
+    def local() -> str:
+        return "ok"
+
+    caller(_keyed("a", NO_READ))
+    seen_a, seen_b = Changes(), Changes()
+    async with (
+        Client(server, message_handler=seen_a) as a,
+        Client(server, message_handler=seen_b) as b,
+    ):
+        await a.list_tools()
+        await a.call_tool("local", {})
+        assert seen_a.count == 0  # nothing changed yet
+
+        # An admin verifies the key elsewhere: the account can now read.
+        caller(_keyed("a", READ_ONLY))
+        await a.call_tool("local", {})
+        assert seen_a.count == 1
+        await a.call_tool("local", {})
+        assert seen_a.count == 1  # told once, not on every call
+
+        # Memory is per caller (session ids aren't stable across protocol eras), so the
+        # second session of the same person isn't told again once the first was.
+        await b.call_tool("local", {})
+        assert seen_b.count == 0
