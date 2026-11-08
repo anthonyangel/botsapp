@@ -5,15 +5,20 @@ UserDirectory in place of WorkOS — no network.
 """
 
 from collections.abc import Iterator
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from cryptography.fernet import Fernet
+from fake_waha import FakeWaha
 from starlette.testclient import TestClient
 
 import botsapp.admin.app as admin_app
 import botsapp.admin.auth as auth
 import botsapp.state as state
 from botsapp.admin.directory import DirectoryError
+from botsapp.key_manager import KeyManager
+from botsapp.secretbox import SecretBox
 
 BASE = "https://admin.example.test"
 ADMIN, OTHER_ADMIN, MEMBER = "admin@example.com", "boss@example.com", "member@example.com"
@@ -79,6 +84,16 @@ def client(monkeypatch, tmp_path, directory) -> Iterator[TestClient]:
     monkeypatch.setattr(auth, "config_from_env", lambda: cfg)
     with TestClient(admin_app.app, base_url=BASE, follow_redirects=False) as c:
         c.cfg = cfg
+        # Inviting also makes the invitee's account (0031): stub WAHA, real keys over a fake.
+        assert state.registry is not None and state.db is not None
+        state.registry.create_session = AsyncMock()
+        state.registry.delete_session = AsyncMock()
+        c.create_session = state.registry.create_session
+        c.delete_session = state.registry.delete_session
+        c.waha = FakeWaha()
+        state.key_manager = KeyManager(
+            state.db, c.waha, SecretBox([Fernet.generate_key().decode()])
+        )
         c.cookies.set(auth.SESSION_COOKIE, auth.issue_session(cfg, ADMIN))
         yield c
 
@@ -151,6 +166,51 @@ async def test_failed_db_write_cancels_the_invitation(client, directory, monkeyp
     assert MEMBER not in await _db_users()
 
 
+async def test_invite_also_creates_their_account_session_and_key(client):
+    r = _post(client, "/users/invite", email="Danni@Example.com", role="member")
+    assert "danni" in _flash(r)["notice"][0]
+    account = await state.db.get_account("danni")
+    assert account is not None and account["owner_email"] == "danni@example.com"
+    client.create_session.assert_awaited_once_with("danni")
+    stored = await state.db.get_account_key("danni")
+    assert stored is not None and stored["actions"]["send"] is False
+
+
+async def test_account_id_avoids_taken_ids(client):
+    _post(client, "/users/invite", email="sam@one.example", role="member")
+    _post(client, "/users/invite", email="sam@two.example", role="member")
+    _post(client, "/users/invite", email="default@one.example", role="member")
+    assert (await state.db.get_account("sam"))["owner_email"] == "sam@one.example"
+    assert (await state.db.get_account("sam-2"))["owner_email"] == "sam@two.example"
+    assert (await state.db.get_account("default-2")) is not None
+
+
+async def test_failed_waha_session_cancels_the_whole_invite(client, directory):
+    client.create_session.side_effect = RuntimeError("WAHA down")
+    r = _post(client, "/users/invite", email=MEMBER, role="member")
+    assert "invite cancelled" in _flash(r)["error"][0]
+    assert MEMBER not in await _db_users()
+    assert await state.db.get_account("member") is None
+    assert directory.ops("revoke") and not directory.invitations
+
+
+async def test_failed_key_cancels_the_whole_invite(client, directory):
+    client.waha.fail.add("create")
+    r = _post(client, "/users/invite", email=MEMBER, role="member")
+    assert "invite cancelled" in _flash(r)["error"][0]
+    assert MEMBER not in await _db_users()
+    assert await state.db.get_account("member") is None
+    client.delete_session.assert_awaited_once_with("member")
+    assert not directory.invitations
+
+
+async def test_without_a_master_key_the_invite_stands_and_says_so(client):
+    state.key_manager = KeyManager(state.db, client.waha, None)
+    r = _post(client, "/users/invite", email=MEMBER, role="member")
+    assert "BOTSAPP_SECRET_KEY" in _flash(r)["notice"][0]
+    assert MEMBER in await _db_users() and await state.db.get_account("member") is not None
+
+
 @pytest.mark.parametrize(
     "data",
     [{"email": "not-an-email", "role": "member"}, {"email": MEMBER, "role": "root"}],
@@ -172,6 +232,7 @@ async def test_inviting_an_existing_user_is_refused(client, directory):
 async def test_remove_deletes_in_workos_then_locally(client, directory):
     _post(client, "/users/invite", email=MEMBER, role="member")
     directory.members[MEMBER] = "member"
+    await state.db.delete_account("member")  # invite made one; Remove refuses while it exists
     r = _post(client, f"/users/{MEMBER}/remove")
     assert "notice" in _flash(r)
     assert directory.ops("remove") == [("remove", MEMBER)]
@@ -186,9 +247,8 @@ async def test_cannot_remove_yourself(client, directory):
 
 async def test_cannot_remove_someone_who_owns_an_account_and_workos_is_untouched(client, directory):
     _post(client, "/users/invite", email=MEMBER, role="member")
-    await state.db.add_account("hers", MEMBER, "acct-hers")
     directory.calls.clear()
-    r = _post(client, f"/users/{MEMBER}/remove")
+    r = _post(client, f"/users/{MEMBER}/remove")  # still owns the account the invite made
     assert "owns 1" in _flash(r)["error"][0]
     assert not directory.ops("remove")
     assert MEMBER in await _db_users()
@@ -203,6 +263,7 @@ async def test_failed_workos_removal_keeps_the_local_user(client, directory):
 
 async def test_failed_local_removal_says_to_retry(client, directory, monkeypatch):
     _post(client, "/users/invite", email=MEMBER, role="member")
+    await state.db.delete_account("member")
 
     async def boom(*_a, **_k):
         raise RuntimeError("locked")
@@ -302,6 +363,7 @@ async def test_without_workos_changes_are_local_only(client):
     assert "notice" in _flash(_post(client, "/users/invite", email=MEMBER, role="admin"))
     assert (await _db_users())[MEMBER] is True
     assert "notice" in _flash(_post(client, f"/users/{MEMBER}/role", role="member"))
+    await state.db.delete_account("member")
     assert "notice" in _flash(_post(client, f"/users/{MEMBER}/remove"))
 
 

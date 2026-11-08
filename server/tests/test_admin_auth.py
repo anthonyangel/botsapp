@@ -288,7 +288,12 @@ def test_post_without_origin_or_referer_is_refused(client):
     assert client.post("/users/invite", data={"email": "x@example.com"}).status_code == 403
 
 
-def test_same_origin_post_is_accepted(client):
+def test_same_origin_post_is_accepted(client, monkeypatch):
+    import botsapp.admin.users as users_module
+
+    # The invite also makes an account (0031); this test is about the origin check only.
+    monkeypatch.setattr(users_module, "free_account_id", AsyncMock(return_value="x"))
+    monkeypatch.setattr(users_module, "create_account", AsyncMock(return_value=None))
     _sign_in(client, ADMIN)
     r = client.post("/users/invite", data={"email": "x@example.com"}, headers=_same_origin())
     assert r.status_code == 303
