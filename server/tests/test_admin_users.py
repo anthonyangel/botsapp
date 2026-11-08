@@ -180,9 +180,10 @@ async def test_account_id_avoids_taken_ids(client):
     _post(client, "/users/invite", email="sam@one.example", role="member")
     _post(client, "/users/invite", email="sam@two.example", role="member")
     _post(client, "/users/invite", email="default@one.example", role="member")
-    assert (await state.db.get_account("sam"))["owner_email"] == "sam@one.example"
-    assert (await state.db.get_account("sam-2"))["owner_email"] == "sam@two.example"
-    assert (await state.db.get_account("default-2")) is not None
+    first, second = await state.db.get_account("sam"), await state.db.get_account("sam-2")
+    assert first is not None and first["owner_email"] == "sam@one.example"
+    assert second is not None and second["owner_email"] == "sam@two.example"
+    assert await state.db.get_account("default-2") is not None
 
 
 async def test_failed_waha_session_cancels_the_whole_invite(client, directory):
@@ -205,6 +206,7 @@ async def test_failed_key_cancels_the_whole_invite(client, directory):
 
 
 async def test_without_a_master_key_the_invite_stands_and_says_so(client):
+    assert state.db is not None
     state.key_manager = KeyManager(state.db, client.waha, None)
     r = _post(client, "/users/invite", email=MEMBER, role="member")
     assert "BOTSAPP_SECRET_KEY" in _flash(r)["notice"][0]
