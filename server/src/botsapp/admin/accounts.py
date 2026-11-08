@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from dataclasses import asdict
 from typing import Any
 from urllib.parse import urlparse
@@ -37,17 +36,17 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 import botsapp.state as state
 from botsapp.admin import auth, templates
+from botsapp.admin.account_setup import AccountSetupError, valid_account_id
+from botsapp.admin.account_setup import create_account as setup_account
 from botsapp.admin.prefix import p
 from botsapp.admin.users import _back, _form_text, live_admin_check
 from botsapp.bridge import SessionStatus
-from botsapp.bridge_registry import session_name_for
 from botsapp.key_manager import KeyManagerError, describe_drift, drift_from_policy
 from botsapp.session import connect_or_get_status, get_status
 from botsapp.waha_client import WAHAClient
 
 logger = logging.getLogger(__name__)
 
-_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$")
 _BACK = p("/")
 
 
@@ -182,7 +181,7 @@ async def create_account(request: Request) -> Response:
     account_id = _form_text(form, "id").lower()
     label = _form_text(form, "label")
     owner = _form_text(form, "owner").lower()
-    if not _ID.match(account_id):
+    if not valid_account_id(account_id):
         return _err("Account id: 2–32 lowercase letters, digits or hyphens.")
     if await state.db.get_account(account_id) is not None:
         return _err(f"Account '{account_id}' already exists.")
@@ -191,34 +190,12 @@ async def create_account(request: Request) -> Response:
     if refused := await live_admin_check(request, _BACK):
         return refused
 
-    await state.db.add_account(account_id, owner, session_name_for(account_id), label=label)
     try:
-        await state.registry.create_session(account_id)
-    except Exception as exc:
-        logger.exception("creating the WAHA session for %s failed", account_id)
-        await state.db.delete_account(account_id)
-        return _err(f"Couldn't create the WhatsApp session ({exc}); nothing was created.")
-
-    manager = state.key_manager
-    if manager is None or not manager.can_store:
-        return _ok(
-            f"Created account '{account_id}' for {owner}, but no access key: BOTSAPP_SECRET_KEY "
-            "or the WAHA admin key isn't set here. The MCP server can't use this account "
-            "until one is created."
-        )
-    try:
-        await manager.provision(account_id)
-    except KeyManagerError as exc:
-        # Undo the session and the row: an account without its key would silently
-        # be locked out of the MCP server.
-        try:
-            await state.registry.delete_session(account_id)
-        except Exception:
-            logger.exception(
-                "could not remove the WAHA session for %s after a key failure", account_id
-            )
-        await state.db.delete_account(account_id)
-        return _err(f"Couldn't create the access key ({exc}); nothing was created.")
+        warning = await setup_account(account_id, owner, label)
+    except AccountSetupError as exc:
+        return _err(str(exc))
+    if warning:
+        return _ok(f"Created account '{account_id}' for {owner}, but {warning}")
     return _ok(f"Created account '{account_id}' for {owner}. They can now pair it.")
 
 

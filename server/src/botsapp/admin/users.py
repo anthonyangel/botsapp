@@ -39,6 +39,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 import botsapp.state as state
 from botsapp.admin import auth, templates
+from botsapp.admin.account_setup import AccountSetupError, create_account, free_account_id
 from botsapp.admin.directory import ROLES, DirectoryError
 from botsapp.admin.prefix import p
 
@@ -112,17 +113,42 @@ async def invite_user(request: Request) -> Response:
             invitation_id = await directory.invite(email, role)
         except DirectoryError as exc:
             return _back("error", f"Invitation failed: {exc}")
-    try:
-        await state.db.add_user(email, is_admin=role == "admin")
-    except Exception:
-        logger.exception("could not record %s after inviting; revoking the invitation", email)
+
+    async def undo() -> None:
         if directory is not None and invitation_id is not None:
             try:
                 await directory.revoke_invitation(invitation_id)
             except DirectoryError as exc:
                 logger.error("could not revoke invitation %s: %s", invitation_id, exc)
+
+    try:
+        await state.db.add_user(email, is_admin=role == "admin")
+    except Exception:
+        logger.exception("could not record %s after inviting; revoking the invitation", email)
+        await undo()
         return _back("error", "Couldn't save the user; the invitation was cancelled.")
-    return _back("notice", f"Invited {email} as {role}." if directory else f"Added {email}.")
+
+    # Their WhatsApp account (0031), so nothing else is left to set up before they sign in.
+    account_id = ""
+    try:
+        account_id = await free_account_id(email)
+        warning = await create_account(account_id, email)
+    except Exception as exc:
+        logger.exception("could not create the account for %s; undoing the invite", email)
+        try:
+            await state.db.remove_user(email)
+        except Exception:
+            logger.exception("could not remove the user row for %s", email)
+        await undo()
+        detail = str(exc) if isinstance(exc, AccountSetupError) else "unexpected error"
+        return _back(
+            "error", f"Couldn't set up their WhatsApp account ({detail}); invite cancelled."
+        )
+    verb = f"Invited {email} as {role}" if directory else f"Added {email}"
+    note = f" Their WhatsApp account '{account_id}' is ready to pair."
+    if warning:
+        note = f" Their account '{account_id}' was created, but {warning}"
+    return _back("notice", verb + "." + note)
 
 
 async def remove_user(request: Request) -> Response:
