@@ -20,7 +20,7 @@ services:
     # `devlikeapro/waha:noweb-<version>` on x86_64 hosts. Version-pinned on purpose
     # (not `dev-arm`); Renovate bumps it. Switching an existing local volume from the
     # old WEBJS setup needs the old `default` session deleted and the QR re-scanned.
-    image: ${WAHA_IMAGE:-devlikeapro/waha:noweb-arm-2026.9.2}
+    image: ${WAHA_IMAGE:-devlikeapro/waha:noweb-arm-2026.10.1}
     environment:
       WHATSAPP_DEFAULT_ENGINE: NOWEB
       # Tracks WhatsApp's current web version automatically (same as waha/fly.toml).
