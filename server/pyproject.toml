@@ -20,7 +20,7 @@ dependencies = [
     "phonenumbers>=9.0.41",
     "workos>=10.6",
     "itsdangerous>=2.2",
-    "cryptography>=46",
+    "cryptography>=46.0.7",
 ]
 
 [project.optional-dependencies]
