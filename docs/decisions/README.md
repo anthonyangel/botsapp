@@ -33,6 +33,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0029 — Session and Accounts pages merged; pairing is per account, not per "selected account"](0029-session-and-accounts-pages-merged.md) *(amends 0025/0026: drops the `"owner"` route-policy tier)*
 - [0030 — Multi-tenancy cleanup: legacy tables and transition fallbacks removed](0030-multi-tenancy-cleanup-legacy-tables-and-fallbacks-removed.md) *(completes 0025/0026; amends 0027/0028: scoped keys mandatory, `ADMIN_DISABLE_AUTH` gone)*
 - [0031 — Inviting a user also creates their WhatsApp account](0031-invite-creates-the-invitees-account.md) *(amends 0025/0029: user and account are no longer two admin steps)*
+- [0032 — Admin UI moves from Material Design Lite to Web Awesome](0032-admin-ui-web-awesome-replaces-mdl.md) *(replaces the never-recorded MDL choice; no build step, no JS framework)*
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 
