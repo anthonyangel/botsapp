@@ -455,6 +455,24 @@ async def test_verify_shows_a_scope_edited_in_wahas_dashboard(client, people):
     assert "differs from intended" in client.get("/").text
 
 
+async def test_repair_button_appears_on_drift_and_restores_the_scope(client, people):
+    from botsapp.waha_keys import KeyInfo
+
+    _as(client, ADMIN)
+    _post(client, "/accounts/default/key/create")
+    assert "key/repair" not in client.get("/").text
+    key_id = await _stored_key_id("default")
+    info = client.waha.keys[key_id]
+    client.waha.keys[key_id] = KeyInfo(
+        key_id, info.session, False, True, {**info.actions, "send": True}
+    )
+    _post(client, "/accounts/default/key/verify")
+    assert "key/repair" in client.get("/").text
+    assert "notice" in _flash(_post(client, "/accounts/default/key/repair"))
+    assert await _stored_key_id("default") == key_id
+    assert "key/repair" not in client.get("/").text
+
+
 async def test_creating_a_second_key_is_refused(client, people):
     _as(client, ADMIN)
     _post(client, "/accounts/default/key/create")
@@ -465,7 +483,7 @@ async def test_key_controls_are_admin_only_and_hidden_from_owners(client, people
     await state.db.add_account("sam", SAM, "acct-sam")
     _as(client, SAM)
     assert "/key/" not in client.get("/").text
-    for action in ("create", "rotate", "verify"):
+    for action in ("create", "rotate", "verify", "repair"):
         assert _post(client, f"/accounts/sam/key/{action}").status_code == 403
     assert await state.db.get_account_key("sam") is None
 

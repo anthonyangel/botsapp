@@ -18,20 +18,12 @@ ADMIN_PID=$!
 # below) — it's only ever reached by Caddy, in this same container, so it
 # moves to a loopback-only port instead of 0.0.0.0:8000.
 #
-# Strict mode (docs/decisions/0027) still applies here: the MCP process uses
-# each account's own scoped WAHA key and must not hold the shared admin key
-# at all, so a bug or a compromise there can't reach other sessions or send.
-# Both processes share one environment on Fly, so withhold it from this one
-# only; admin-ui, started above, keeps it for session lifecycle and key
-# management.
-case "${WAHA_REQUIRE_SCOPED_KEYS:-}" in
-  1 | true | TRUE | True | yes | YES)
-    env -u WAHA_API_KEY uv run uvicorn botsapp.main:app --host 127.0.0.1 --port 8001 &
-    ;;
-  *)
-    uv run uvicorn botsapp.main:app --host 127.0.0.1 --port 8001 &
-    ;;
-esac
+# The MCP process uses each account's own scoped WAHA key (docs/decisions/0027)
+# and must not hold the shared admin key at all, so a bug or a compromise there
+# can't reach other sessions or send. Both processes share one environment on
+# Fly, so withhold it from this one only; admin-ui, started above, keeps it for
+# session lifecycle and key management.
+env -u WAHA_API_KEY uv run uvicorn botsapp.main:app --host 127.0.0.1 --port 8001 &
 MCP_PID=$!
 
 # Before 0028, mcp-server was execed as PID 1, so Fly's health checks and

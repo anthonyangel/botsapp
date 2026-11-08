@@ -1172,10 +1172,19 @@ def _account_card(row: dict[str, Any], current: str) -> str:
                 if not row.get("key_drift")
                 else "<b>differs from intended</b>: " + html.escape(row["key_drift"])
             )
+            repair = (
+                f"""
+        <form method="post" action="{p("/accounts")}/{aid}/key/repair" class="inline-form">
+          <wa-button type="submit" appearance="outlined" size="s" variant="warning">
+            Repair</wa-button></form>"""
+                if row.get("key_drift")
+                else ""
+            )
             buttons = f"""
         <div class="wa-cluster wa-gap-s">
           <form method="post" action="{p("/accounts")}/{aid}/key/verify" class="inline-form">
             <wa-button type="submit" appearance="outlined" size="s">Verify</wa-button></form>
+          {repair}
           <form method="post" action="{p("/accounts")}/{aid}/key/rotate" class="inline-form"
                 onsubmit="return confirm('Replace this account\\'s access key?');">
             <wa-button type="submit" appearance="outlined" size="s">Rotate</wa-button></form>

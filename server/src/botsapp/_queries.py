@@ -1,5 +1,5 @@
 """
-Shared aiosql query loader for db.py's chat_metadata store.
+Shared aiosql query loader for db.py's metadata store.
 
 SQLite, via aiosqlite — the only query set this project loads; WAHA has no
 shared database of its own to read.

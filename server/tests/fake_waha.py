@@ -46,7 +46,16 @@ class FakeWaha:
         )
 
     async def update_key_actions(self, key_id: str, actions: dict[str, bool]) -> KeyInfo:
-        raise NotImplementedError
+        self._maybe_fail("update")
+        current = self.keys[key_id]
+        self.keys[key_id] = KeyInfo(
+            key_id,
+            current.session,
+            current.is_admin,
+            current.is_active,
+            {**{a: False for a in WAHA_ACTIONS}, **(self.apply_actions or actions)},
+        )
+        return self.keys[key_id]
 
     async def delete_key(self, key_id: str) -> None:
         self._maybe_fail("delete")

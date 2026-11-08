@@ -47,33 +47,23 @@ primary_region = "fra"
   WAHA_URL = "http://botsapp-waha.internal:3000"
   WAHA_SESSION = "default"
   # REQUIRED: the first admin's email (docs/decisions/0025). Owns the primary
-  # WhatsApp account; the pre-multi-tenancy allowlist/tags are adopted into it
-  # on first start. Left empty, nothing is visible to the MCP server.
+  # WhatsApp account. Left empty, nothing is visible to the MCP server.
   BOTSAPP_ADMIN_EMAIL = ""
-  # Admin UI login (docs/decisions/0026). It refuses to start without either
-  # the login settings (WORKOS_CLIENT_ID, WORKOS_API_KEY, BOTSAPP_SESSION_SECRET
-  # as `fly secrets`; ADMIN_BASE_URL, optionally WORKOS_ORG_ID, here) or an
-  # explicit opt-out below. With 0028 exposing /admin publicly, leaving login
-  # off means "anyone who can reach https://<host>/admin acts as
-  # BOTSAPP_ADMIN_EMAIL with no login at all" — set ADMIN_DISABLE_AUTH="true"
-  # here (and redeploy) only as an emergency fallback if login itself breaks;
-  # it affects the admin UI only (unlike LOCAL_DEV_DISABLE_AUTH, which would
-  # also open the MCP server). Note start.sh backgrounds the admin UI, so a
-  # refusal to start is silent to Fly's health checks: check `fly logs`.
-  # ADMIN_DISABLE_AUTH = "true"
+  # Admin UI login (docs/decisions/0026). It refuses to start without the login
+  # settings (WORKOS_CLIENT_ID, WORKOS_API_KEY, BOTSAPP_SESSION_SECRET as
+  # `fly secrets`; ADMIN_BASE_URL, optionally WORKOS_ORG_ID, here). start.sh
+  # backgrounds the admin UI, so a refusal to start is silent to Fly's health
+  # checks: check `fly logs`.
   # The path admin-ui's routes, redirects and templates are all built under
   # (docs/decisions/0028) — must match server/Caddyfile's /admin/* handler,
   # which forwards the path unstripped. Empty for direct access (local dev,
   # `fly proxy`); set here because Fly's deploy fronts both processes behind
   # Caddy on one port.
   ADMIN_URL_PREFIX = "/admin"
-  # Scoped WAHA keys (docs/decisions/0027). BOTSAPP_SECRET_KEY, the master key that
-  # encrypts the stored keys, is a `fly secrets` value, never set here. Rollout: set it,
-  # deploy, create each account's key on the Accounts page (including "default"), check
-  # the MCP server still works, THEN uncomment the line below. In strict mode start.sh
-  # withholds WAHA_API_KEY from the MCP process and the MCP server refuses accounts
-  # without a key. To undo, remove the line and redeploy.
-  # WAHA_REQUIRE_SCOPED_KEYS = "true"
+  # Scoped WAHA keys (docs/decisions/0027, 0030). BOTSAPP_SECRET_KEY, the master key
+  # that encrypts the stored keys, is a `fly secrets` value, never set here. Both
+  # processes need it; every account needs a key (created on the Session page), and
+  # start.sh withholds WAHA_API_KEY from the MCP process.
   LOG_LEVEL = "INFO"
   # FastMCP's default logger uses rich, which word-wraps to a fixed console
   # width even when stderr isn't a TTY — on Fly this chops a single log

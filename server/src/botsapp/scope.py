@@ -27,7 +27,6 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 
 import botsapp.state as state
-from botsapp.bridge_factory import scoped_keys_required
 from botsapp.bridge_registry import ScopedKeyError
 from botsapp.capabilities import allows, missing, required_actions
 from botsapp.message_store import AllowlistedMessageStore
@@ -42,12 +41,11 @@ logger = logging.getLogger(__name__)
 
 
 class ScopedChatDb:
-    """``DatabaseManager``'s chat-metadata methods bound to one (account, viewer).
+    """``DatabaseManager``'s per-viewer chat-access methods bound to one (account, viewer).
 
-    Keeps the method names the single-tenant code used (``list_allowed_jids``,
-    ``search_by_tags``, ``get_chat_metadata``, ...) so ``AllowlistedMessageStore``
-    and the tools read the same; every call is checked against the viewer's
-    grant inside ``DatabaseManager``.
+    Exposes them as ``list_allowed_jids``, ``search_by_tags``, ``get_chat_metadata``,
+    ... so ``AllowlistedMessageStore`` and the tools read naturally; every call is
+    checked against the viewer's grant inside ``DatabaseManager``.
     """
 
     def __init__(
@@ -130,11 +128,11 @@ async def resolve_scope(account: str | None = None) -> Scope:
     required = required_actions.get()
     if required:
         chosen = next(a for a in accounts if a["id"] == account)
-        if not allows(chosen, required, strict=scoped_keys_required()):
+        if not allows(chosen, required):
             logger.warning(
                 "account %s's key lacks %s",
                 account,
-                ", ".join(missing(chosen, required, strict=scoped_keys_required())),
+                ", ".join(missing(chosen, required)),
             )
             raise ToolError(
                 "This WhatsApp account's access key doesn't allow that; "

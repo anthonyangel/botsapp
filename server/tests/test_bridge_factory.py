@@ -1,36 +1,29 @@
 """
-Unit tests for bridge_factory.build_bridge_and_store — WAHA is the only
-bridge provider, so this just confirms construction reads the right env
-vars and one client satisfies both the Bridge and MessageStore protocols.
+Unit tests for bridge_factory — WAHA is the only bridge provider; construction
+goes through the per-account registry (0025).
 """
 
-from botsapp.bridge_factory import bridge_provider_name, build_bridge_and_store
-from botsapp.waha_client import WAHAClient
+from unittest.mock import AsyncMock
+
+from botsapp.bridge_factory import bridge_provider_name, build_registry
 
 
-def test_builds_waha_client(monkeypatch):
+async def test_builds_a_registry_whose_admin_client_is_a_waha_client(monkeypatch):
     monkeypatch.setenv("WAHA_URL", "http://fake")
     monkeypatch.setenv("WAHA_API_KEY", "fake-key")
-    bridge, store = build_bridge_and_store()
-    assert isinstance(bridge, WAHAClient)
-    # One client satisfies both protocols (see waha_client.py's module docstring).
-    assert bridge is store
+    db = AsyncMock()
+    db.get_account.return_value = {"id": "default", "waha_session": "family"}
+    registry = build_registry(db)
+    client = await registry.for_account("default", purpose="admin")
+    assert client._session_name == "family"
+    assert client._api_key == "fake-key"
     assert bridge_provider_name() == "waha"
+    await registry.close()
 
 
-def test_uses_default_session_name_when_unset(monkeypatch):
+async def test_the_admin_key_is_optional(monkeypatch):
     monkeypatch.setenv("WAHA_URL", "http://fake")
-    monkeypatch.setenv("WAHA_API_KEY", "fake-key")
-    monkeypatch.delenv("WAHA_SESSION", raising=False)
-    bridge, _ = build_bridge_and_store()
-    assert isinstance(bridge, WAHAClient)
-    assert bridge._session_name == "default"
-
-
-def test_honors_custom_session_name(monkeypatch):
-    monkeypatch.setenv("WAHA_URL", "http://fake")
-    monkeypatch.setenv("WAHA_API_KEY", "fake-key")
-    monkeypatch.setenv("WAHA_SESSION", "family")
-    bridge, _ = build_bridge_and_store()
-    assert isinstance(bridge, WAHAClient)
-    assert bridge._session_name == "family"
+    monkeypatch.delenv("WAHA_API_KEY", raising=False)
+    registry = build_registry(AsyncMock())
+    assert registry is not None
+    await registry.close()

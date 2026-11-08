@@ -23,10 +23,10 @@ allowlist-aware store to delegate that fetch through until the jid is
 already known to be allowed.
 
 Bridge-agnostic: every write/group/contact/session call goes through
-a bridge (scope.bridge; state.bridge for the permanently blocked outbound
-tools), which returns bridge.py's dataclasses (SendResult, GroupInfo,
-ContactInfo, SessionStatus) rather than a bridge-specific shape — nothing
-here branches on which bridge is selected.
+a bridge (scope.bridge — on the account's read-only scoped key, so even the
+permanently blocked outbound tools could not send), which returns bridge.py's
+dataclasses (SendResult, GroupInfo, ContactInfo, SessionStatus) rather than a
+bridge-specific shape — nothing here branches on which bridge is selected.
 """
 
 import logging
@@ -419,8 +419,8 @@ async def send_message(to: str, text: str) -> dict[str, Any]:
         Dict with fields: success, message_id, details.
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.send_message(to=to, text=text))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.send_message(to=to, text=text))
     except Exception as exc:
         logger.error("send_message failed: %s", exc)
         return {"error": str(exc)}
@@ -437,8 +437,8 @@ async def send_media(to: str, media_url: str, media_type: str, caption: str = ""
         caption: Optional caption text.
     """
     try:
-        assert state.bridge is not None
-        result = await state.bridge.send_media(
+        bridge = (await resolve_scope()).bridge
+        result = await bridge.send_media(
             to=to, media_url=media_url, media_type=media_type, caption=caption
         )
         return asdict(result)
@@ -790,8 +790,8 @@ async def leave_group(group_jid: str, ctx: Context | None = None) -> dict[str, A
             )
             if confirm.action != "accept" or not confirm.data:
                 return {"status": "cancelled", "reason": "User declined to leave group"}
-        assert state.bridge is not None
-        return asdict(await state.bridge.leave_group(group_jid))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.leave_group(group_jid))
     except Exception as exc:
         logger.error("leave_group failed: %s", exc)
         return {"error": str(exc)}
@@ -809,8 +809,8 @@ async def create_group(name: str, participants: list[str]) -> dict[str, Any]:
         Group metadata including jid, name, and participants.
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.create_group(name=name, participants=participants))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.create_group(name=name, participants=participants))
     except Exception as exc:
         logger.error("create_group failed: %s", exc)
         return {"error": str(exc)}
@@ -828,8 +828,8 @@ async def update_group_participants(
         phones: List of phone numbers or JIDs.
     """
     try:
-        assert state.bridge is not None
-        result = await state.bridge.update_group_participants(
+        bridge = (await resolve_scope()).bridge
+        result = await bridge.update_group_participants(
             group_jid=group_jid, action=action, phones=phones
         )
         return asdict(result)
@@ -847,8 +847,8 @@ async def set_group_name(group_jid: str, name: str) -> dict[str, Any]:
         name: New group name.
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.set_group_name(group_jid, name))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.set_group_name(group_jid, name))
     except Exception as exc:
         logger.error("set_group_name failed: %s", exc)
         return {"error": str(exc)}
@@ -863,8 +863,8 @@ async def set_group_topic(group_jid: str, topic: str) -> dict[str, Any]:
         topic: New topic/description text.
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.set_group_topic(group_jid, topic))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.set_group_topic(group_jid, topic))
     except Exception as exc:
         logger.error("set_group_topic failed: %s", exc)
         return {"error": str(exc)}
@@ -896,8 +896,8 @@ async def send_reaction(to: str, message_id: str, emoji: str) -> dict[str, Any]:
         emoji: Emoji character (e.g. "👍", "❤️").
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.send_reaction(to=to, message_id=message_id, emoji=emoji))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.send_reaction(to=to, message_id=message_id, emoji=emoji))
     except Exception as exc:
         logger.error("send_reaction failed: %s", exc)
         return {"error": str(exc)}
@@ -912,8 +912,8 @@ async def mark_read(to: str, message_ids: list[str]) -> dict[str, Any]:
         message_ids: List of message IDs to mark as read.
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.mark_read(to=to, message_ids=message_ids))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.mark_read(to=to, message_ids=message_ids))
     except Exception as exc:
         logger.error("mark_read failed: %s", exc)
         return {"error": str(exc)}
@@ -929,8 +929,8 @@ async def edit_message(to: str, message_id: str, text: str) -> dict[str, Any]:
         text: New message content.
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.edit_message(to=to, message_id=message_id, text=text))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.edit_message(to=to, message_id=message_id, text=text))
     except Exception as exc:
         logger.error("edit_message failed: %s", exc)
         return {"error": str(exc)}
@@ -952,8 +952,8 @@ async def delete_message(to: str, message_id: str, ctx: Context | None = None) -
             )
             if confirm.action != "accept" or not confirm.data:
                 return {"status": "cancelled", "reason": "User declined to delete message"}
-        assert state.bridge is not None
-        return asdict(await state.bridge.delete_message(to=to, message_id=message_id))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.delete_message(to=to, message_id=message_id))
     except Exception as exc:
         logger.error("delete_message failed: %s", exc)
         return {"error": str(exc)}
@@ -972,8 +972,8 @@ async def send_location(
         name: Optional place name.
     """
     try:
-        assert state.bridge is not None
-        result = await state.bridge.send_location(
+        bridge = (await resolve_scope()).bridge
+        result = await bridge.send_location(
             to=to, latitude=latitude, longitude=longitude, name=name
         )
         return asdict(result)
@@ -992,8 +992,8 @@ async def send_contact(to: str, name: str, vcard: str) -> dict[str, Any]:
         vcard: Contact info in vCard format.
     """
     try:
-        assert state.bridge is not None
-        return asdict(await state.bridge.send_contact(to=to, name=name, vcard=vcard))
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.send_contact(to=to, name=name, vcard=vcard))
     except Exception as exc:
         logger.error("send_contact failed: %s", exc)
         return {"error": str(exc)}
@@ -1009,10 +1009,8 @@ async def send_poll(group_jid: str, question: str, options: list[str]) -> dict[s
         options: List of answer options (2-12 items).
     """
     try:
-        assert state.bridge is not None
-        result = await state.bridge.send_poll(
-            group_jid=group_jid, question=question, options=options
-        )
+        bridge = (await resolve_scope()).bridge
+        result = await bridge.send_poll(group_jid=group_jid, question=question, options=options)
         return asdict(result)
     except Exception as exc:
         logger.error("send_poll failed: %s", exc)
@@ -1029,8 +1027,8 @@ async def set_chat_presence(to: str, state_value: str, media: str = "") -> dict[
         media: Optional "audio" to show recording indicator.
     """
     try:
-        assert state.bridge is not None
-        result = await state.bridge.set_chat_presence(to=to, state=state_value, media=media)
+        bridge = (await resolve_scope()).bridge
+        result = await bridge.set_chat_presence(to=to, state=state_value, media=media)
         return asdict(result)
     except Exception as exc:
         logger.error("set_chat_presence failed: %s", exc)
@@ -1330,8 +1328,8 @@ async def disconnect_whatsapp(ctx: Context | None = None) -> dict[str, Any]:
             )
             if confirm.action != "accept" or not confirm.data:
                 return {"status": "cancelled", "reason": "User declined disconnect"}
-        assert state.bridge is not None
-        return asdict(await state.bridge.disconnect())
+        bridge = (await resolve_scope()).bridge
+        return asdict(await bridge.disconnect())
     except Exception as exc:
         logger.error("disconnect_whatsapp failed: %s", exc)
         return {"error": str(exc)}

@@ -75,7 +75,6 @@ async def test_create_session_delegates_to_the_accounts_client(db: DatabaseManag
 
 # ── which key a process gets (0027) ──────────────────────────────────────────
 
-import logging  # noqa: E402
 
 from cryptography.fernet import Fernet  # noqa: E402
 
@@ -108,8 +107,8 @@ async def test_mcp_uses_the_accounts_own_key_never_the_admin_key(db, box):
     await registry.close()
 
 
-async def test_strict_mode_fails_closed_for_an_account_without_a_key(db, box):
-    registry = BridgeRegistry(db, "http://waha", "ADMIN_KEY", box=box, require_scoped_keys=True)
+async def test_an_account_without_a_key_fails_closed(db, box):
+    registry = BridgeRegistry(db, "http://waha", "ADMIN_KEY", box=box)
     with pytest.raises(NoScopedKeyError):
         await registry.for_account("her", purpose="mcp")
     # ...but the admin side is unaffected, so the key can still be created.
@@ -117,19 +116,9 @@ async def test_strict_mode_fails_closed_for_an_account_without_a_key(db, box):
     await registry.close()
 
 
-async def test_transition_mode_falls_back_to_the_admin_key_and_warns_once(db, box, caplog):
-    registry = BridgeRegistry(db, "http://waha", "ADMIN_KEY", box=box)
-    with caplog.at_level(logging.WARNING):
-        first = await registry.for_account("her", purpose="mcp")
-        await registry.for_account("her", purpose="mcp")
-    assert first._api_key == "ADMIN_KEY"
-    assert caplog.text.count("no scoped WAHA key") == 1
-    await registry.close()
-
-
-async def test_strict_mode_works_with_no_admin_key_in_the_process(db, box):
+async def test_works_with_no_admin_key_in_the_process(db, box):
     await _give_key(db, box)
-    registry = BridgeRegistry(db, "http://waha", None, box=box, require_scoped_keys=True)
+    registry = BridgeRegistry(db, "http://waha", None, box=box)
     assert (await registry.for_account("her", purpose="mcp"))._api_key == "wk_acct_secret"
     with pytest.raises(ScopedKeyError):
         await registry.for_account("her", purpose="admin")
