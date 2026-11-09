@@ -35,11 +35,11 @@ import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import aiohttp
 
-from botsapp.bridge import ContactInfo, GroupInfo, SendResult, SessionStatus
+from botsapp.bridge import ContactInfo, GroupInfo, LabelInfo, SendResult, SessionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -616,6 +616,26 @@ class WAHAClient:
                 f"/api/{self._session_name}/groups/{group_jid}/description", {"description": topic}
             )
         )
+
+    # ── Labels (bridge.Bridge) ───────────────────────────────────────────
+
+    async def list_labels(self) -> list[LabelInfo]:
+        labels = await self._get(f"/api/{self._session_name}/labels")
+        return [
+            LabelInfo(
+                id=str(raw["id"]), name=raw.get("name") or "", color=raw.get("colorHex") or ""
+            )
+            for raw in (labels or [])
+            if raw.get("id") is not None
+        ]
+
+    async def get_label_chat_jids(self, label_id: str) -> list[str]:
+        chats = await self._get(
+            f"/api/{self._session_name}/labels/{quote(label_id, safe='')}/chats"
+        )
+        return [
+            _from_waha_jid(_serialized_id(c.get("id", ""))) for c in (chats or []) if c.get("id")
+        ]
 
     # ── Contacts (bridge.Bridge) ─────────────────────────────────────────
 
