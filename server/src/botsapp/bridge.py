@@ -77,6 +77,15 @@ class ContactInfo:
     extra: dict = field(default_factory=dict)
 
 
+@dataclass
+class LabelInfo:
+    """A WhatsApp label (the phone's "lists" and labels); ``id`` is bridge-assigned."""
+
+    id: str
+    name: str
+    color: str = ""
+
+
 class Bridge(Protocol):
     """Everything tools.py/the admin UI need from a WhatsApp bridge, beyond
     chat/message history (see message_store.MessageStore for that)."""
@@ -121,3 +130,7 @@ class Bridge(Protocol):
     async def get_contact(self, jid: str) -> ContactInfo | None: ...
     async def check_phone(self, phones: list[str]) -> list[ContactInfo]: ...
     async def get_avatar_url(self, jid_or_phone: str, preview: bool = True) -> str | None: ...
+
+    # ── Labels ───────────────────────────────────────────────────────────
+    async def list_labels(self) -> list[LabelInfo]: ...
+    async def get_label_chat_jids(self, label_id: str) -> list[str]: ...

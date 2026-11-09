@@ -16,7 +16,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.utilities.types import Audio, File, Image
 from mcp.types import ElicitRequestFormParams, InputRequiredResult, ResourceLink
 
-from botsapp.bridge import GroupInfo, SendResult
+from botsapp.bridge import GroupInfo, LabelInfo, SendResult
 from botsapp.message_store import ChatNotAllowedError
 from botsapp.tools import (
     MAX_GROUP_CHOICES,
@@ -36,6 +36,7 @@ from botsapp.tools import (
     list_chats,
     list_communities,
     list_groups,
+    list_labels,
     list_messages,
     list_newsletters,
     mark_read,
@@ -311,6 +312,68 @@ async def test_list_groups_error(mock_bridge: AsyncMock):
     mock_bridge.list_groups.side_effect = RuntimeError("timeout")
     with pytest.raises(ToolError):
         await list_groups()
+
+
+# ── Labels ───────────────────────────────────────────────────────────────────
+
+
+def _labels(mock_bridge: AsyncMock, by_label: dict[str, list[str]]) -> None:
+    mock_bridge.list_labels.return_value = [
+        LabelInfo(id=lid, name=name) for lid, name in [("8", "Estate Agents"), ("9", "Ari")]
+    ]
+    mock_bridge.get_label_chat_jids.side_effect = lambda lid: by_label.get(lid, [])
+
+
+async def test_list_labels_counts_only_visible_chats(mock_bridge: AsyncMock, mock_db: AsyncMock):
+    _labels(mock_bridge, {"8": ["a@g.us", "hidden@g.us"], "9": ["hidden@g.us"]})
+    mock_db.list_allowed_jids.return_value = {"a@g.us"}
+    # "Ari" holds only a hidden chat, so its name must not be revealed at all.
+    assert _dump(await list_labels()) == [{"id": "8", "name": "Estate Agents", "chat_count": 1}]
+
+
+async def test_list_labels_error_hides_internals(mock_bridge: AsyncMock):
+    mock_bridge.list_labels.side_effect = RuntimeError("waha 500")
+    with pytest.raises(ToolError) as exc_info:
+        await list_labels()
+    assert "waha 500" not in str(exc_info.value)
+
+
+async def test_list_chats_by_label_name_is_case_insensitive_and_allowlisted(
+    mock_bridge: AsyncMock, mock_db: AsyncMock, mock_message_store: AsyncMock
+):
+    _labels(mock_bridge, {"8": ["a@g.us", "hidden@g.us", "b@g.us"]})
+    mock_db.list_allowed_jids.return_value = {"a@g.us", "b@g.us"}
+    mock_message_store.get_chat.side_effect = lambda jid: {"jid": jid, "name": jid}
+    result = _dump(await list_chats(labels=["estate AGENTS"]))
+    assert [c["jid"] for c in result["items"]] == ["a@g.us", "b@g.us"]
+    mock_message_store.get_chats.assert_not_awaited()
+
+
+async def test_list_chats_by_label_id_unions_labels_without_duplicates(
+    mock_bridge: AsyncMock, mock_message_store: AsyncMock
+):
+    _labels(mock_bridge, {"8": ["a@g.us", "b@g.us"], "9": ["b@g.us", "c@g.us"]})
+    mock_message_store.get_chat.side_effect = lambda jid: {"jid": jid, "name": jid}
+    result = _dump(await list_chats(labels=["8", "Ari"]))
+    assert [c["jid"] for c in result["items"]] == ["a@g.us", "b@g.us", "c@g.us"]
+
+
+async def test_list_chats_unknown_label_returns_empty(
+    mock_bridge: AsyncMock, mock_message_store: AsyncMock
+):
+    _labels(mock_bridge, {"8": ["a@g.us"]})
+    result = _dump(await list_chats(labels=["Nope"]))
+    assert result == {"items": [], "next_offset": None}
+
+
+async def test_list_chats_labels_and_tags_intersect(
+    mock_bridge: AsyncMock, mock_db: AsyncMock, mock_message_store: AsyncMock
+):
+    _labels(mock_bridge, {"8": ["a@g.us", "b@g.us"]})
+    mock_db.search_by_tags.return_value = [{"jid": "b@g.us", "tags": ["vip"]}]
+    mock_message_store.get_chat.side_effect = lambda jid: {"jid": jid, "name": jid}
+    result = _dump(await list_chats(labels=["Estate Agents"], tags=["vip"]))
+    assert [c["jid"] for c in result["items"]] == ["b@g.us"]
 
 
 async def test_list_groups_filters_by_tags(mock_bridge: AsyncMock, mock_db: AsyncMock):

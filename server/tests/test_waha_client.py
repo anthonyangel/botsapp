@@ -460,6 +460,43 @@ async def test_list_groups_translates(client, aresponses):
     assert groups[0].participants == ["a@c.us", "b@c.us"]
 
 
+async def test_list_labels_translates(client, aresponses):
+    # Shape confirmed live (2026.10.1, NOWEB): string ids, colorHex, built-ins included.
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/{SESSION}/labels",
+        payload=[
+            {"id": "2", "name": "Favourites", "color": 0, "colorHex": "#ff9485"},
+            {"id": "8", "name": "🏡 Estate Agents", "color": 4, "colorHex": "#99b6c1"},
+        ],
+    )
+    labels = await client.list_labels()
+    assert [(label.id, label.name, label.color) for label in labels] == [
+        ("2", "Favourites", "#ff9485"),
+        ("8", "🏡 Estate Agents", "#99b6c1"),
+    ]
+
+
+async def test_get_label_chat_jids_translates(client, aresponses):
+    _mock(
+        aresponses,
+        "get",
+        f"{BASE_URL}/api/{SESSION}/labels/8/chats",
+        payload=[
+            {"id": "212347578806297@lid", "conversationTimestamp": 1},
+            {"id": "972500000000@c.us"},
+            {"id": "120363422592703958@g.us", "name": "Buy house"},
+            {"name": "no id"},
+        ],
+    )
+    assert await client.get_label_chat_jids("8") == [
+        "212347578806297@lid",
+        "972500000000@s.whatsapp.net",
+        "120363422592703958@g.us",
+    ]
+
+
 async def test_list_groups_excludes_left_participants(client, aresponses):
     # list_groups() must agree with get_group_info() on participant count
     # for the same group — both exclude departed ("left") members.
