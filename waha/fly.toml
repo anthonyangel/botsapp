@@ -14,7 +14,7 @@ primary_region = "fra"
   # Not `dev`: it only ever added unreleased commits on top of the latest release.
   # Renovate tracks this tag (see .github/renovate.json5); WAHA bumps wait for a
   # Dependency Dashboard tick. See docs/decisions/0023.
-  image = "devlikeapro/waha:noweb-2026.9.2"
+  image = "devlikeapro/waha:noweb-2026.10.1"
 
 [[mounts]]
   # One volume, not two: a Fly Machine only supports a single volume mount
