@@ -817,7 +817,7 @@ async def test_get_media_returns_audio_for_voice_note(
     # WhatsApp voice notes ("ptt" messages) come back from WAHA as
     # audio/ogg with a codec parameter — must be stripped down to a plain
     # "ogg" format, not passed through verbatim.
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)  # no transcription attempt
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)  # no transcription attempt
     mock_message_store.get_message_chat_jid.return_value = "allowed@g.us"
     mock_db.list_allowed_jids.return_value = {"allowed@g.us"}
     ogg_bytes = b"OggS-fake-opus-bytes"

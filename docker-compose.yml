@@ -71,7 +71,7 @@ services:
       # docs/decisions/0015-email-allowlist-in-db.md.
       LOCAL_DEV_DISABLE_AUTH: ${LOCAL_DEV_DISABLE_AUTH:-}
       # Optional — voice-note transcription only, see .env.example.
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
     volumes:
       - metadata-data:/app/data
     depends_on:

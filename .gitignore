@@ -226,3 +226,5 @@ __marimo__/
 
 # `workos seed` run state — regenerated locally, not source of truth
 .workos-seed-state.json
+# Local secrets written by `elevenlabs onboard`
+/.env.local
