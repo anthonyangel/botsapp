@@ -379,14 +379,14 @@ class DatabaseManager:
         viewer = self._normalize_email(viewer_email)
         if not await self.has_account_access(account_id, viewer):
             return []
-        wanted = {t.lower() for t in tags}
+        wanted = {t.casefold() for t in tags}
         rows = [
             self._row_to_dict(r)
             async for r in queries.list_chat_access_rows(
                 self.connection, account_id=account_id, viewer_email=viewer
             )
         ]
-        matches = [r for r in rows if wanted & {t.lower() for t in r["tags"]}]
+        matches = [r for r in rows if wanted & {t.casefold() for t in r["tags"]}]
         for r in matches:
             r["name"] = r["jid"]
         matches.sort(key=lambda r: r["updated_at"], reverse=True)

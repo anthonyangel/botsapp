@@ -318,11 +318,15 @@ async def list_chats(
             if labels:
                 labelled = await _label_jids(scope, labels)
                 jids = labelled if jids is None else [j for j in labelled if j in set(jids)]
-            resolved = []
-            for jid in jids or []:
-                chat = await scope.store.get_chat(jid)
-                if chat is not None:
-                    resolved.append(chat)
+            # One bulk listing rather than get_chat per jid: WAHA has no
+            # single-chat endpoint on NOWEB, so get_chat comes back None and
+            # every match would be silently dropped. Bulk order is by recency.
+            wanted = set(jids or [])
+            resolved = (
+                [c for c in await scope.store.get_chats(limit=MAX_BULK_CHATS) if c["jid"] in wanted]
+                if wanted
+                else []
+            )
             return ChatPage.model_validate(
                 _page(resolved[offset : offset + limit + 1], limit, offset)
             )
@@ -534,7 +538,7 @@ async def _find_groups(
     if tags:
         tag_matched_jids = {r["jid"] for r in await scope.db.search_by_tags(tags=tags)}
 
-    query_lower = query.lower()
+    query_lower = query.casefold()
     results: list[Group] = []
     for g in groups:
         if g.jid not in allowed:
@@ -543,7 +547,7 @@ async def _find_groups(
             continue
         if tag_matched_jids is not None and g.jid not in tag_matched_jids:
             continue
-        if query_lower and query_lower not in g.name.lower():
+        if query_lower and query_lower not in g.name.casefold():
             continue
         if min_participants and g.participant_count < min_participants:
             continue
@@ -618,6 +622,7 @@ async def list_groups(
 # Most options a single picker will show. Past this the user is better served by
 # narrowing the search than by scrolling a long list.
 MAX_GROUP_CHOICES = 20
+MAX_BULK_CHATS = 10_000  # "all of them" at family scale; the store filters to the allowlist
 _NONE_OF_THESE = "__none__"
 
 
@@ -795,7 +800,7 @@ async def list_communities(
         if tags:
             tag_matched_jids = {r["jid"] for r in await scope.db.search_by_tags(tags=tags)}
 
-        query_lower = query.lower()
+        query_lower = query.casefold()
         results: list[Community] = []
         for g in groups:
             if not g.is_community:
@@ -804,7 +809,7 @@ async def list_communities(
                 continue
             if tag_matched_jids is not None and g.jid not in tag_matched_jids:
                 continue
-            if query_lower and query_lower not in g.name.lower():
+            if query_lower and query_lower not in g.name.casefold():
                 continue
             results.append(Community(jid=g.jid, name=g.name, topic=g.topic))
         return results
@@ -1128,7 +1133,7 @@ async def add_tag(jid: str, tag: str, account: str | None = None) -> TagResult:
         await _require_allowed(scope, jid)
         meta = await scope.db.get_chat_metadata(jid=jid)
         current = list(meta["tags"]) if meta else []
-        if tag not in current:
+        if tag.casefold() not in {t.casefold() for t in current}:
             current.append(tag)
         await scope.db.upsert_chat_metadata(jid=jid, tags=current)
         return TagResult(jid=jid, tags=current, status="saved")
@@ -1157,7 +1162,7 @@ async def remove_tag(jid: str, tag: str, account: str | None = None) -> TagResul
         scope = await resolve_scope(account)
         await _require_allowed(scope, jid)
         meta = await scope.db.get_chat_metadata(jid=jid)
-        current = [t for t in (meta["tags"] if meta else []) if t != tag]
+        current = [t for t in (meta["tags"] if meta else []) if t.casefold() != tag.casefold()]
         await scope.db.upsert_chat_metadata(jid=jid, tags=current)
         return TagResult(jid=jid, tags=current, status="saved")
     except Exception as exc:
