@@ -109,7 +109,7 @@ Fly binds loopback-only instead of the public interface.
   local `aiohttp` test server instead of monkeypatching `aiohttp` internals,
   so it survives `aiohttp` version bumps. See [0009](../docs/decisions/0009-aresponses-for-http-mocking.md).
   Don't reach for `aioresponses` in new tests.
-- `pyproject.toml`'s `[[tool.ty.overrides]]` relaxes `unresolved-attribute`/
+- `pyproject.toml`'s `[[tool.ty.overrides]]` relaxes `missing-attribute`/`missing-union-attribute`/
   `invalid-assignment` for `tests/**` only — deliberate, documented there:
   tests monkeypatch `Optional`-typed module globals (`state.db`, `state.registry`)
   with `AsyncMock`s and read them back via `.return_value`/`.assert_awaited_once_with`,

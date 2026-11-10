@@ -80,5 +80,6 @@ include = ["src", "tests"]
 include = ["tests/**"]
 
 [tool.ty.overrides.rules]
-unresolved-attribute = "warn"
+missing-attribute = "warn"
+missing-union-attribute = "warn"
 invalid-assignment = "warn"
