@@ -18,7 +18,7 @@ from starlette.testclient import TestClient
 import botsapp.admin.app as admin_app
 import botsapp.admin.auth as admin_auth
 import botsapp.state as state
-from botsapp.bridge import ContactInfo, GroupInfo, SessionStatus
+from botsapp.bridge import ContactInfo, GroupInfo, LabelInfo, SessionStatus
 from botsapp.db import DatabaseManager
 
 _LOGGED_IN_STATUS = SessionStatus(
@@ -413,3 +413,49 @@ def test_save_metadata_parses_comma_separated_tags(client):
 def test_save_metadata_empty_tags(client):
     client.post("/chats/g1@g.us/metadata", data={"tags": ""}, follow_redirects=False)
     client.chat_db.upsert_chat_metadata.assert_awaited_once_with(jid="g1@g.us", tags=[])
+
+
+def _labelled(client):
+    client.bridge.list_labels.return_value = [
+        LabelInfo(id="2", name="Favourites"),
+        LabelInfo(id="8", name="Estate Agents", color="#99b6c1"),
+        LabelInfo(id="9", name="Kids"),
+    ]
+    members = {"2": ["155@s.whatsapp.net"], "8": ["155@s.whatsapp.net"], "9": []}
+    client.bridge.get_label_chat_jids.side_effect = lambda label_id: members[label_id]
+    client.bridge.get_chats.return_value = [{"jid": "155@s.whatsapp.net", "name": "Bob"}]
+
+
+def test_chats_page_shows_labels_apart_from_tags_and_hides_builtins(client):
+    _labelled(client)
+    client.chat_db.get_chat_metadata.return_value = {"is_allowed": True, "tags": ["family"]}
+    r = client.get("/chats")
+    assert 'class="label-pill"' in r.text
+    assert "Estate Agents" in r.text
+    assert "Favourites" not in r.text  # built-in filter, not a list
+    assert 'value="9"' in r.text  # unassigned label is offered in the picker
+    assert 'value="2"' not in r.text
+
+
+def test_owner_sets_labels_keeping_builtin_memberships(client):
+    _labelled(client)
+    r = client.post(
+        "/chats/155@s.whatsapp.net/labels",
+        data={"label": ["9", "8", "999"]},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    client.bridge.set_chat_labels.assert_awaited_once_with("155@s.whatsapp.net", ["2", "8", "9"])
+
+
+def test_owner_creates_a_label(client):
+    r = client.post("/labels/create", data={"name": " Work "}, follow_redirects=False)
+    assert r.status_code == 303
+    client.bridge.create_label.assert_awaited_once_with("Work")
+    assert client.post("/labels/create", data={"name": " "}).status_code == 400
+
+
+def test_label_errors_do_not_break_the_chats_page(client):
+    client.bridge.list_labels.side_effect = RuntimeError("boom")
+    client.bridge.get_chats.return_value = [{"jid": "155@s.whatsapp.net", "name": "Bob"}]
+    assert client.get("/chats").status_code == 200

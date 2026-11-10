@@ -35,6 +35,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0031 — Inviting a user also creates their WhatsApp account](0031-invite-creates-the-invitees-account.md) *(amends 0025/0029: user and account are no longer two admin steps)*
 - [0032 — Admin UI moves from Material Design Lite to Web Awesome](0032-admin-ui-web-awesome-replaces-mdl.md) *(replaces the never-recorded MDL choice; no build step, no JS framework)*
 - [0033 — WhatsApp labels/lists as a read-only chat filter](0033-whatsapp-labels-as-a-read-only-chat-filter.md) *(adds a data source alongside tags; nothing copied into SQLite)*
+- [0034 — Admin UI shows and edits WhatsApp labels](0034-admin-ui-shows-and-edits-whatsapp-labels.md) *(separate Labels column, owner-only writes via the admin key; amends 0033's read-only bullet for the admin UI only)*
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 
