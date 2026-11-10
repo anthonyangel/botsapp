@@ -210,6 +210,31 @@ async def _chat_access(request: Request) -> _ChatAccess | Response:
     )
 
 
+# WhatsApp's built-in filters (Unread, Favourites, Groups) come back from WAHA
+# as labels with ids 1-3 (docs/decisions/0033). They aren't user lists, so the
+# UI neither shows nor offers them — but they are kept when a chat's labels are
+# rewritten, because WAHA replaces the whole set.
+_BUILTIN_LABEL_IDS = frozenset({"1", "2", "3"})
+
+
+async def _label_data(bridge: WAHAClient) -> tuple[list[dict[str, str]], dict[str, list[dict]]]:
+    """The account's own labels, and which labels each chat jid carries.
+    Resolved live from WhatsApp (nothing is stored here); a bridge error just
+    means no labels are shown."""
+    try:
+        labels = [lb for lb in await bridge.list_labels() if lb.id not in _BUILTIN_LABEL_IDS]
+        members = await asyncio.gather(*(bridge.get_label_chat_jids(lb.id) for lb in labels))
+    except Exception as exc:
+        logger.warning("labels unavailable for the admin chat list: %s", exc)
+        return [], {}
+    all_labels = [{"id": lb.id, "name": lb.name, "color": lb.color} for lb in labels]
+    by_jid: dict[str, list[dict]] = {}
+    for label, jids in zip(all_labels, members, strict=True):
+        for jid in jids:
+            by_jid.setdefault(jid, []).append(label)
+    return all_labels, by_jid
+
+
 async def chats_index(request: Request) -> Response:
     assert state.db is not None
     access = await _chat_access(request)
@@ -226,6 +251,7 @@ async def chats_index(request: Request) -> Response:
     # to them: not the owner's other chats, nor how many there are.
     visible = None if access.is_owner else await chat_db.list_allowed_jids()
 
+    all_labels, labels_by_jid = await _label_data(bridge)
     all_chats = await bridge.get_chats(limit=1000, offset=0)
     if visible is not None:
         all_chats = [c for c in all_chats if c["jid"] in visible]
@@ -259,6 +285,7 @@ async def chats_index(request: Request) -> Response:
                 "country_flag": _country_flag(jid),
                 "is_allowed": bool(meta.get("is_allowed")),
                 "tags": meta.get("tags") or [],
+                "labels": labels_by_jid.get(jid, []),
             }
         )
 
@@ -282,6 +309,7 @@ async def chats_index(request: Request) -> Response:
                 "avatar_url": avatar,
                 "is_allowed": bool(meta.get("is_allowed")),
                 "tags": meta.get("tags") or [],
+                "labels": labels_by_jid.get(jid, []),
             }
         )
 
@@ -348,6 +376,7 @@ async def chats_index(request: Request) -> Response:
                 "avatar_url": avatar,
                 "is_allowed": bool(meta.get("is_allowed")),
                 "tags": meta.get("tags") or [],
+                "labels": labels_by_jid.get(g.jid, []),
             }
         )
 
@@ -365,6 +394,7 @@ async def chats_index(request: Request) -> Response:
                 "avatar_url": avatar,
                 "is_allowed": bool(meta.get("is_allowed")),
                 "tags": meta.get("tags") or [],
+                "labels": labels_by_jid.get(g.jid, []),
             }
         )
 
@@ -375,6 +405,7 @@ async def chats_index(request: Request) -> Response:
             "jid": STATUS_BROADCAST_JID,
             "is_allowed": bool(meta.get("is_allowed")),
             "tags": meta.get("tags") or [],
+            "labels": labels_by_jid.get(STATUS_BROADCAST_JID, []),
         }
 
     grants = await state.db.list_grants(request.state.account) if access.is_owner else []
@@ -382,6 +413,8 @@ async def chats_index(request: Request) -> Response:
         templates.ChatView(
             can_toggle=access.can_toggle,
             can_tag=access.can_tag,
+            can_label=access.is_owner,
+            labels=tuple(all_labels),
             for_viewer="" if access.viewer == access.me else access.viewer,
             me=access.me,
             owner=access.owner,
@@ -468,12 +501,60 @@ async def save_metadata(request: Request) -> Response:
     return _redirect_to_tab(jid)
 
 
+async def save_labels(request: Request) -> Response:
+    """Set which WhatsApp labels a chat carries. Labels belong to the account
+    (they show on the owner's phone), so only the owner may change them."""
+    access = await _chat_access(request)
+    if isinstance(access, Response):
+        return access
+    if not access.is_owner:
+        return PlainTextResponse("Only the account's owner can change its labels", 403)
+    jid = request.path_params["jid"]
+    form = await request.form()
+    chosen = {v for v in form.getlist("label") if isinstance(v, str)}
+    bridge = await _bridge(request)
+    labels, _ = await _label_data(bridge)
+    wanted = [lb["id"] for lb in labels if lb["id"] in chosen]
+    # WAHA replaces the whole set: carry over any built-in filter the chat has.
+    kept = await _builtin_label_ids(bridge, jid)
+    await bridge.set_chat_labels(jid, [*kept, *wanted])
+    return _redirect_to_tab(jid)
+
+
+async def _builtin_label_ids(bridge: WAHAClient, jid: str) -> list[str]:
+    out = []
+    for label_id in sorted(_BUILTIN_LABEL_IDS):
+        try:
+            if jid in await bridge.get_label_chat_jids(label_id):
+                out.append(label_id)
+        except Exception:
+            continue
+    return out
+
+
+async def create_label(request: Request) -> Response:
+    access = await _chat_access(request)
+    if isinstance(access, Response):
+        return access
+    if not access.is_owner:
+        return PlainTextResponse("Only the account's owner can change its labels", 403)
+    form = await request.form()
+    name = _form_str(form, "name").strip()
+    if not name or len(name) > 100:
+        return PlainTextResponse("Give the label a name (up to 100 characters)", 400)
+    bridge = await _bridge(request)
+    await bridge.create_label(name)
+    return RedirectResponse(url=p("/chats"), status_code=303)
+
+
 app = Starlette(
     routes=[
         Route(p("/"), accounts.session_index),
         Route(p("/chats"), chats_index),
         Route(p("/chats/{jid}/allow"), toggle_allowed, methods=["POST"]),
         Route(p("/chats/{jid}/metadata"), save_metadata, methods=["POST"]),
+        Route(p("/chats/{jid}/labels"), save_labels, methods=["POST"]),
+        Route(p("/labels/create"), create_label, methods=["POST"]),
         Route(p("/users"), users.users_index),
         Route(p("/users/invite"), users.invite_user, methods=["POST"]),
         Route(p("/users/{email}/role"), users.change_role, methods=["POST"]),

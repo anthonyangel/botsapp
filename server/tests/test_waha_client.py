@@ -1189,3 +1189,16 @@ async def test_delete_key_tolerates_404_only():
     client._request = AsyncMock(side_effect=RuntimeError("WAHA DELETE /api/keys/k → 500: {}"))
     with pytest.raises(RuntimeError):
         await client.delete_key("k")
+
+
+async def test_create_label_and_set_chat_labels(client, aresponses):
+    _mock(
+        aresponses,
+        "post",
+        f"{BASE_URL}/api/{SESSION}/labels",
+        payload={"id": "11", "name": "Work", "color": 1, "colorHex": "#abc"},
+    )
+    label = await client.create_label("Work")
+    assert (label.id, label.name, label.color) == ("11", "Work", "#abc")
+    _mock(aresponses, "put", f"{BASE_URL}/api/{SESSION}/labels/chats/155@c.us", payload={})
+    await client.set_chat_labels("155@s.whatsapp.net", ["8", "11"])
