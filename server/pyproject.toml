@@ -21,6 +21,7 @@ dependencies = [
     "workos>=10.8.0",
     "itsdangerous>=2.2",
     "cryptography>=50.0.2",
+    "elevenlabs>=2.77.0",
 ]
 
 [project.optional-dependencies]
@@ -79,5 +80,6 @@ include = ["src", "tests"]
 include = ["tests/**"]
 
 [tool.ty.overrides.rules]
-unresolved-attribute = "warn"
+missing-attribute = "warn"
+missing-union-attribute = "warn"
 invalid-assignment = "warn"

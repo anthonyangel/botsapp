@@ -1279,7 +1279,7 @@ async def get_media(
     something readable — MCP's Audio content block is for playback, and
     nothing here assumes the receiving model can listen to it. So for
     audio, this also attempts a transcript (see transcription.py; best
-    effort — silently omitted if OPENAI_API_KEY isn't configured or the
+    effort — silently omitted if ELEVENLABS_API_KEY isn't configured or the
     request fails) and returns it as a second item alongside the audio,
     prefixed with a label saying it is machine-generated (OpenAI
     speech-to-text, so the audio is sent to a third party) and may contain
