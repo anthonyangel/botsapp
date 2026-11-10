@@ -637,6 +637,21 @@ class WAHAClient:
             _from_waha_jid(_serialized_id(c.get("id", ""))) for c in (chats or []) if c.get("id")
         ]
 
+    async def create_label(self, name: str, color_index: int = 0) -> LabelInfo:
+        raw = await self._post(
+            f"/api/{self._session_name}/labels", {"name": name, "colorIndex": color_index}
+        )
+        return LabelInfo(
+            id=str(raw["id"]), name=raw.get("name") or name, color=raw.get("colorHex") or ""
+        )
+
+    async def set_chat_labels(self, jid: str, label_ids: list[str]) -> None:
+        """Replace the chat's whole label set (WAHA's PUT semantics)."""
+        await self._put(
+            f"/api/{self._session_name}/labels/chats/{quote(_to_waha_jid(jid), safe='')}",
+            {"labels": [{"id": i} for i in label_ids]},
+        )
+
     # ── Contacts (bridge.Bridge) ─────────────────────────────────────────
 
     async def get_contacts(self) -> list[ContactInfo]:

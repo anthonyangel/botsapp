@@ -47,6 +47,10 @@ _EXTRA_CSS = """
                                color: var(--wa-color-text-quiet); }
   .table-toolbar { max-width: 24rem; }
   .tag-list:empty { display: none; }
+  .label-pill { border: 2px solid var(--wa-color-surface-border); }
+  .label-opt { display: block; font-size: var(--wa-font-size-s); }
+  .label-edit summary { cursor: pointer; font-size: var(--wa-font-size-s);
+                        color: var(--wa-color-text-quiet); }
   .meta-form wa-input { min-width: 8rem; }
   .data-table { width: 100%; border-collapse: collapse; }
   .data-table th { text-align: start; color: var(--wa-color-text-quiet);
@@ -104,6 +108,8 @@ class ChatView:
 
     can_toggle: bool = True
     can_tag: bool = True
+    can_label: bool = False  # WhatsApp labels belong to the account: owner only
+    labels: tuple[dict[str, str], ...] = ()  # every assignable label {id, name, color}
     for_viewer: str = ""
     me: str = ""
     owner: str = ""
@@ -476,6 +482,56 @@ def _metadata_form(jid: str, tags: list[str]) -> str:
     </div>"""
 
 
+def _label_cell(jid: str, labels: list[dict[str, str]]) -> str:
+    """WhatsApp labels (the phone's lists), shown apart from tags: coloured
+    outlined pills, and — for the account's owner — a checkbox picker that
+    saves the whole set. Tags are botsapp's own per-viewer free text; labels
+    live in WhatsApp (docs/decisions/0033, 0034)."""
+    view = chat_view.get()
+
+    def pill(lb: dict[str, str]) -> str:
+        color = lb.get("color") or ""
+        style = f' style="border-color:{html.escape(color, quote=True)}"' if color else ""
+        return (
+            f'<wa-tag size="s" variant="neutral" class="label-pill"{style}>'
+            f"{html.escape(lb['name'])}</wa-tag>"
+        )
+
+    chips = "".join(pill(lb) for lb in labels)
+    pills = f'<div class="wa-cluster wa-gap-2xs">{chips}</div>' if chips else ""
+    if not view.can_label or not view.labels:
+        return pills
+    have = {lb["id"] for lb in labels}
+    boxes = "".join(
+        f'<label class="label-opt"><input type="checkbox" name="label" '
+        f'value="{html.escape(lb["id"], quote=True)}"{" checked" if lb["id"] in have else ""}> '
+        f"{html.escape(lb['name'])}</label>"
+        for lb in view.labels
+    )
+    return f"""
+    <div class="wa-stack wa-gap-xs">
+      {pills}
+      <details class="label-edit">
+        <summary>Edit labels</summary>
+        <form method="post" action="{_chat_url(jid, "labels")}" class="wa-stack wa-gap-2xs">
+          {boxes}
+          <wa-button size="s" type="submit">Save labels</wa-button>
+        </form>
+      </details>
+    </div>"""
+
+
+def _new_label_form() -> str:
+    if not chat_view.get().can_label:
+        return ""
+    return f"""
+    <form method="post" action="{p("/labels/create")}" class="wa-cluster wa-gap-xs">
+      <wa-input size="s" name="name" placeholder="New WhatsApp label…"
+                aria-label="New label name" maxlength="100"></wa-input>
+      <wa-button size="s" type="submit">Create label</wa-button>
+    </form>"""
+
+
 def _direct_chat_row(row: dict[str, Any]) -> str:
     jid = row["jid"]
     name = row.get("name") or jid
@@ -515,6 +571,7 @@ def _direct_chat_row(row: dict[str, Any]) -> str:
       <td data-label="Country">{html.escape(country_flag)}</td>
       <td data-label="Allowlist">{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
       <td data-label="Tags">{_metadata_form(jid, tags)}</td>
+      <td data-label="Labels">{_label_cell(jid, row.get("labels") or [])}</td>
     </tr>"""
 
 
@@ -558,6 +615,7 @@ def _group_row(row: dict[str, Any]) -> str:
       <td data-label="Members">{participant_count} members</td>
       <td data-label="Allowlist">{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
       <td data-label="Tags">{_metadata_form(jid, tags)}</td>
+      <td data-label="Labels">{_label_cell(jid, row.get("labels") or [])}</td>
     </tr>"""
 
 
@@ -597,6 +655,7 @@ def _community_row(row: dict[str, Any]) -> str:
       </td>
       <td data-label="Allowlist">{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
       <td data-label="Tags">{_metadata_form(jid, tags)}</td>
+      <td data-label="Labels">{_label_cell(jid, row.get("labels") or [])}</td>
     </tr>"""
 
 
@@ -625,6 +684,7 @@ def _newsletter_row(row: dict[str, Any]) -> str:
       </td>
       <td data-label="Allowlist">{_allow_toggle(jid, bool(row.get("is_allowed")))}</td>
       <td data-label="Tags">{_metadata_form(jid, tags)}</td>
+      <td data-label="Labels">{_label_cell(jid, row.get("labels") or [])}</td>
     </tr>"""
 
 
@@ -925,16 +985,16 @@ def browse_page(
     group_count_total: int = 0,
 ) -> str:
     direct_trs = "".join(_direct_chat_row(r) for r in direct_rows) or _empty_row(
-        4, "No direct chats yet — give WhatsApp a moment to sync after logging in."
+        5, "No direct chats yet — give WhatsApp a moment to sync after logging in."
     )
     group_trs = "".join(_group_row(r) for r in group_rows) or _empty_row(
-        4, "No groups found — the connected account isn't in any groups yet."
+        5, "No groups found — the connected account isn't in any groups yet."
     )
     community_trs = "".join(_community_row(r) for r in community_rows) or _empty_row(
-        3, "No communities found — the connected account isn't in any yet."
+        4, "No communities found — the connected account isn't in any yet."
     )
     newsletter_trs = "".join(_newsletter_row(r) for r in newsletter_rows) or _empty_row(
-        3, "No newsletter/channel subscriptions found."
+        4, "No newsletter/channel subscriptions found."
     )
 
     # Some bridges (WAHA, confirmed live) never surface a status@broadcast
@@ -956,6 +1016,7 @@ def browse_page(
           </p>
           {_allow_toggle(status_jid, bool(status_row.get("is_allowed")))}
           {_metadata_form(status_jid, status_tags)}
+          {_label_cell(status_jid, status_row.get("labels") or [])}
         </div>
       </wa-tab-panel>"""
 
@@ -966,6 +1027,7 @@ def browse_page(
             ("Country", "country", "text"),
             ("Allowlist", None, None),
             ("Tags", None, None),
+            ("Labels", None, None),
         ],
         direct_trs,
         _distinct_tags(direct_rows),
@@ -978,6 +1040,7 @@ def browse_page(
             ("Members", "members", "number"),
             ("Allowlist", None, None),
             ("Tags", None, None),
+            ("Labels", None, None),
         ],
         group_trs,
         _distinct_tags(group_rows),
@@ -986,7 +1049,12 @@ def browse_page(
     )
     communities = _table_panel(
         "community",
-        [("Community", "name", "text"), ("Allowlist", None, None), ("Tags", None, None)],
+        [
+            ("Community", "name", "text"),
+            ("Allowlist", None, None),
+            ("Tags", None, None),
+            ("Labels", None, None),
+        ],
         community_trs,
         _distinct_tags(community_rows),
         "Search communities (name, topic, tags)…",
@@ -999,7 +1067,12 @@ def browse_page(
     )
     newsletters = _table_panel(
         "newsletter",
-        [("Newsletter", "name", "text"), ("Allowlist", None, None), ("Tags", None, None)],
+        [
+            ("Newsletter", "name", "text"),
+            ("Allowlist", None, None),
+            ("Tags", None, None),
+            ("Labels", None, None),
+        ],
         newsletter_trs,
         _distinct_tags(newsletter_rows),
         "Search newsletters (name, tags)…",
@@ -1007,6 +1080,7 @@ def browse_page(
 
     body = f"""
     {_chat_header()}
+    {_new_label_form()}
     <p>
       Toggling "Visible to MCP" is the actual privacy boundary — Claude cannot see a
       chat, its messages, or its metadata until it's on here.
