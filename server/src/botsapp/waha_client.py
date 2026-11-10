@@ -845,12 +845,12 @@ class WAHAClient:
     async def search_chats(
         self, query: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]:
-        query_lower = query.lower()
+        query_lower = query.casefold()
         all_chats = await self.get_chats(limit=1000, offset=0)
         matches = [
             c
             for c in all_chats
-            if query_lower in (c.get("name") or "").lower() or query_lower in c["jid"].lower()
+            if query_lower in (c.get("name") or "").casefold() or query_lower in c["jid"].casefold()
         ]
         return matches[offset : offset + limit]
 

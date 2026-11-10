@@ -128,17 +128,19 @@ async def test_list_chats_by_tags_uses_db_search_by_tags(
     # search_by_tags only locates matching jids — the full chat record
     # (matching every other branch's documented shape: jid, name,
     # last_message, last_message_at) comes from
-    # message_store.get_chat, same as the query/default branches.
+    # message_store.get_chats (bulk: WAHA has no single-chat endpoint).
     mock_db.search_by_tags.return_value = [{"jid": "a@g.us", "tags": ["vip"]}]
-    mock_message_store.get_chat.return_value = {
-        "jid": "a@g.us",
-        "name": "Alice",
-        "last_message": "hi",
-        "last_message_at": "2026-01-01T00:00:00Z",
-    }
+    mock_message_store.get_chats.return_value = [
+        {
+            "jid": "a@g.us",
+            "name": "Alice",
+            "last_message": "hi",
+            "last_message_at": "2026-01-01T00:00:00Z",
+        }
+    ]
     result = _dump(await list_chats(tags=["vip"]))
     mock_db.search_by_tags.assert_awaited_once_with(tags=["vip"])
-    mock_message_store.get_chat.assert_awaited_once_with("a@g.us")
+    mock_message_store.get_chats.assert_awaited_once()
     assert result == {
         "items": [
             {
@@ -166,7 +168,7 @@ async def test_list_chats_by_tags_paginates_after_dropping_unresolved_matches(
         "a@g.us": {"jid": "a@g.us", "name": "A"},
         "b@g.us": {"jid": "b@g.us", "name": "B"},
     }
-    mock_message_store.get_chat.side_effect = lambda jid: chats.get(jid)
+    mock_message_store.get_chats.return_value = list(chats.values())
     result = _dump(await list_chats(tags=["vip"], limit=1))
     assert [c["jid"] for c in result["items"]] == ["a@g.us"]
     assert result["next_offset"] == 1
@@ -176,7 +178,7 @@ async def test_list_chats_by_tags_skips_matches_with_no_chat_record(
     mock_db: AsyncMock, mock_message_store: AsyncMock
 ):
     mock_db.search_by_tags.return_value = [{"jid": "a@g.us", "tags": ["vip"]}]
-    mock_message_store.get_chat.return_value = None
+    mock_message_store.get_chats.return_value = []
     result = _dump(await list_chats(tags=["vip"]))
     assert result == {"items": [], "next_offset": None}
 
@@ -343,17 +345,20 @@ async def test_list_chats_by_label_name_is_case_insensitive_and_allowlisted(
 ):
     _labels(mock_bridge, {"8": ["a@g.us", "hidden@g.us", "b@g.us"]})
     mock_db.list_allowed_jids.return_value = {"a@g.us", "b@g.us"}
-    mock_message_store.get_chat.side_effect = lambda jid: {"jid": jid, "name": jid}
+    mock_message_store.get_chats.return_value = [
+        {"jid": j, "name": j} for j in ("a@g.us", "b@g.us", "c@g.us")
+    ]
     result = _dump(await list_chats(labels=["estate AGENTS"]))
     assert [c["jid"] for c in result["items"]] == ["a@g.us", "b@g.us"]
-    mock_message_store.get_chats.assert_not_awaited()
 
 
 async def test_list_chats_by_label_id_unions_labels_without_duplicates(
     mock_bridge: AsyncMock, mock_message_store: AsyncMock
 ):
     _labels(mock_bridge, {"8": ["a@g.us", "b@g.us"], "9": ["b@g.us", "c@g.us"]})
-    mock_message_store.get_chat.side_effect = lambda jid: {"jid": jid, "name": jid}
+    mock_message_store.get_chats.return_value = [
+        {"jid": j, "name": j} for j in ("a@g.us", "b@g.us", "c@g.us")
+    ]
     result = _dump(await list_chats(labels=["8", "Ari"]))
     assert [c["jid"] for c in result["items"]] == ["a@g.us", "b@g.us", "c@g.us"]
 
@@ -371,7 +376,9 @@ async def test_list_chats_labels_and_tags_intersect(
 ):
     _labels(mock_bridge, {"8": ["a@g.us", "b@g.us"]})
     mock_db.search_by_tags.return_value = [{"jid": "b@g.us", "tags": ["vip"]}]
-    mock_message_store.get_chat.side_effect = lambda jid: {"jid": jid, "name": jid}
+    mock_message_store.get_chats.return_value = [
+        {"jid": j, "name": j} for j in ("a@g.us", "b@g.us", "c@g.us")
+    ]
     result = _dump(await list_chats(labels=["Estate Agents"], tags=["vip"]))
     assert [c["jid"] for c in result["items"]] == ["b@g.us"]
 
