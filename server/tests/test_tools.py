@@ -20,6 +20,7 @@ from botsapp.bridge import GroupInfo, LabelInfo, SendResult
 from botsapp.message_store import ChatNotAllowedError
 from botsapp.tools import (
     MAX_GROUP_CHOICES,
+    MAX_LIST_LIMIT,
     TRANSCRIPT_LABEL,
     GroupChoice,
     add_tag,
@@ -270,7 +271,7 @@ def _group(
 
 async def test_list_groups_delegates_to_bridge(mock_bridge: AsyncMock):
     mock_bridge.list_groups.return_value = [_group()]
-    result = _dump(await list_groups())
+    result = _dump(await list_groups())["items"]
     mock_bridge.list_groups.assert_awaited_once()
     assert result[0]["jid"] == "g1@g.us"
     assert result[0]["name"] == "Test"
@@ -286,7 +287,7 @@ async def test_list_groups_excludes_chats_not_in_allowlist(
         _group(jid="g1@g.us", name="Allowed"),
         _group(jid="g2@g.us", name="Not allowed"),
     ]
-    result = _dump(await list_groups())
+    result = _dump(await list_groups())["items"]
     assert [g["jid"] for g in result] == ["g1@g.us"]
 
 
@@ -295,7 +296,7 @@ async def test_list_groups_excludes_communities_by_default(mock_bridge: AsyncMoc
         _group(jid="g1@g.us", name="Community", is_community=True),
         _group(jid="g2@g.us", name="Regular", is_community=False),
     ]
-    result = _dump(await list_groups())
+    result = _dump(await list_groups())["items"]
     assert len(result) == 1
     assert result[0]["name"] == "Regular"
 
@@ -305,9 +306,39 @@ async def test_list_groups_include_communities(mock_bridge: AsyncMock):
         _group(jid="g1@g.us", name="Community", is_community=True),
         _group(jid="g2@g.us", name="Regular", is_community=False),
     ]
-    result = _dump(await list_groups(exclude_communities=False))
+    result = _dump(await list_groups(exclude_communities=False))["items"]
     assert len(result) == 2
     assert result[0]["is_community"] is True
+
+
+async def test_list_groups_paginates_with_next_offset(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group(jid=f"g{i}@g.us", name=f"G{i}") for i in range(5)
+    ]
+    first = _dump(await list_groups(limit=2))
+    assert [g["jid"] for g in first["items"]] == ["g0@g.us", "g1@g.us"]
+    assert first["next_offset"] == 2
+    last = _dump(await list_groups(limit=2, offset=4))
+    assert [g["jid"] for g in last["items"]] == ["g4@g.us"]
+    assert last["next_offset"] is None
+
+
+async def test_list_groups_limit_is_capped(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group(jid=f"g{i}@g.us", name=f"G{i}") for i in range(MAX_LIST_LIMIT + 5)
+    ]
+    page = _dump(await list_groups(limit=10_000))
+    assert len(page["items"]) == MAX_LIST_LIMIT
+    assert page["next_offset"] == MAX_LIST_LIMIT
+
+
+async def test_list_communities_paginates_with_next_offset(mock_bridge: AsyncMock):
+    mock_bridge.list_groups.return_value = [
+        _group(jid=f"c{i}@g.us", name=f"C{i}", is_community=True) for i in range(3)
+    ]
+    page = _dump(await list_communities(limit=2))
+    assert [c["jid"] for c in page["items"]] == ["c0@g.us", "c1@g.us"]
+    assert page["next_offset"] == 2
 
 
 async def test_list_groups_error(mock_bridge: AsyncMock):
@@ -389,7 +420,7 @@ async def test_list_groups_filters_by_tags(mock_bridge: AsyncMock, mock_db: Asyn
         _group(jid="g2@g.us", name="Unrelated Group"),
     ]
     mock_db.search_by_tags.return_value = [{"jid": "g1@g.us", "tags": ["Gan"], "name": "g1@g.us"}]
-    result = _dump(await list_groups(tags=["Gan"]))
+    result = _dump(await list_groups(tags=["Gan"]))["items"]
     mock_db.search_by_tags.assert_awaited_once_with(tags=["Gan"])
     assert [g["jid"] for g in result] == ["g1@g.us"]
 
@@ -406,14 +437,14 @@ async def test_list_groups_tags_and_query_combine_with_and(
         {"jid": "g1@g.us", "tags": ["Gan"], "name": "g1@g.us"},
         {"jid": "g2@g.us", "tags": ["Gan"], "name": "g2@g.us"},
     ]
-    result = _dump(await list_groups(tags=["Gan"], query="parents"))
+    result = _dump(await list_groups(tags=["Gan"], query="parents"))["items"]
     assert [g["jid"] for g in result] == ["g1@g.us"]
 
 
 async def test_list_groups_tags_no_match_returns_empty(mock_bridge: AsyncMock, mock_db: AsyncMock):
     mock_bridge.list_groups.return_value = [_group(jid="g1@g.us", name="Something Else")]
     mock_db.search_by_tags.return_value = []
-    result = _dump(await list_groups(tags=["nonexistent"]))
+    result = _dump(await list_groups(tags=["nonexistent"]))["items"]
     assert result == []
 
 
@@ -453,7 +484,7 @@ async def test_list_groups_never_leaks_participants_or_invite_link(mock_bridge: 
             invite_link="https://chat.whatsapp.com/SuperSecretInviteCode",
         )
     ]
-    result = _dump(await list_groups())
+    result = _dump(await list_groups())["items"]
     assert "participants" not in result[0]
     assert "invite_link" not in result[0]
     assert result[0].keys() == _DOCUMENTED_LIST_GROUPS_FIELDS
@@ -464,7 +495,7 @@ async def test_list_groups_result_keys_match_documented_contract(mock_bridge: As
     # be a deliberate, reviewed change to both list_groups and this set —
     # not a silent pass-through.
     mock_bridge.list_groups.return_value = [_group()]
-    result = _dump(await list_groups())
+    result = _dump(await list_groups())["items"]
     assert result[0].keys() == _DOCUMENTED_LIST_GROUPS_FIELDS
 
 
@@ -491,7 +522,7 @@ async def test_list_groups_output_size_bounded_with_many_large_groups(mock_bridg
         )
     )
     mock_bridge.list_groups.return_value = groups
-    result = _dump(await list_groups())
+    result = _dump(await list_groups())["items"]
     # 30 groups of ~six short fields each is a few KB at most; the old
     # asdict()-based version would have serialized well over 100K chars
     # for this exact shape (2000+50*29 member JIDs).
@@ -506,7 +537,7 @@ async def test_list_communities_returns_only_communities(mock_bridge: AsyncMock)
         _group(jid="g1@g.us", name="Community", is_community=True),
         _group(jid="g2@g.us", name="Regular", is_community=False),
     ]
-    result = _dump(await list_communities())
+    result = _dump(await list_communities())["items"]
     assert [c["jid"] for c in result] == ["g1@g.us"]
     assert result[0]["name"] == "Community"
 
@@ -519,7 +550,7 @@ async def test_list_communities_excludes_chats_not_in_allowlist(
         _group(jid="g1@g.us", name="Allowed", is_community=True),
         _group(jid="g2@g.us", name="Not allowed", is_community=True),
     ]
-    result = _dump(await list_communities())
+    result = _dump(await list_communities())["items"]
     assert [c["jid"] for c in result] == ["g1@g.us"]
 
 
@@ -531,7 +562,7 @@ async def test_list_communities_filters_by_query_and_tags(
         _group(jid="g2@g.us", name="Other Community", is_community=True),
     ]
     mock_db.search_by_tags.return_value = [{"jid": "g1@g.us", "tags": ["shul"], "name": "g1@g.us"}]
-    result = _dump(await list_communities(query="yeshurun", tags=["shul"]))
+    result = _dump(await list_communities(query="yeshurun", tags=["shul"]))["items"]
     assert [c["jid"] for c in result] == ["g1@g.us"]
 
 
@@ -558,7 +589,7 @@ async def test_list_communities_never_leaks_participant_count_or_invite_link(
             invite_link="https://chat.whatsapp.com/SuperSecretInviteCode",
         )
     ]
-    result = _dump(await list_communities())
+    result = _dump(await list_communities())["items"]
     assert result[0].keys() == _DOCUMENTED_LIST_COMMUNITIES_FIELDS
 
 

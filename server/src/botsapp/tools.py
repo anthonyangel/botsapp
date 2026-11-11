@@ -178,6 +178,16 @@ class Community(BaseModel):
     topic: str
 
 
+class GroupPage(BaseModel):
+    items: list[Group]
+    next_offset: int | None = Field(description="Pass as offset for the next page; null = no more")
+
+
+class CommunityPage(BaseModel):
+    items: list[Community]
+    next_offset: int | None = Field(description="Pass as offset for the next page; null = no more")
+
+
 class GroupDetail(Group):
     participants: list[str]
     invite_link: str | None = None
@@ -573,8 +583,10 @@ async def list_groups(
     min_participants: int = 0,
     max_participants: int = 0,
     exclude_communities: bool = True,
+    limit: int = 50,
+    offset: int = 0,
     account: str | None = None,
-) -> list[Group]:
+) -> GroupPage:
     """List or search WhatsApp groups the account belongs to.
 
     Only groups allowed via the admin UI are ever returned. All filters are
@@ -600,14 +612,18 @@ async def list_groups(
         exclude_communities: Exclude community parent groups whose participant counts
             are unreliable (default true). Set false to include them, or use the
             dedicated list_communities tool instead.
+        limit: Maximum number of groups to return (default 50, capped at 200).
+        offset: Pagination offset (default 0).
         account: WhatsApp account id (see list_accounts); optional when you have only one.
 
     Returns:
-        Filtered list with fields: jid, name, topic, participant_count,
-        is_community, linked_parent_jid.
+        ``items`` (fields: jid, name, topic, participant_count, is_community,
+        linked_parent_jid) and ``next_offset`` — pass it as ``offset`` to get
+        the next page; null means there are no more results.
     """
     try:
-        return await _find_groups(
+        limit = max(1, min(limit, MAX_LIST_LIMIT))
+        found = await _find_groups(
             await resolve_scope(account),
             query=query,
             tags=tags,
@@ -615,6 +631,7 @@ async def list_groups(
             max_participants=max_participants,
             exclude_communities=exclude_communities,
         )
+        return GroupPage.model_validate(_page(found[offset : offset + limit + 1], limit, offset))
     except Exception as exc:
         raise _fail("list_groups", exc) from exc
 
@@ -766,8 +783,12 @@ async def choose_group(
 
 @mcp.tool(title="List communities", tags={"read", "group"}, annotations=_READ_WHATSAPP)
 async def list_communities(
-    query: str = "", tags: list[str] | None = None, account: str | None = None
-) -> list[Community]:
+    query: str = "",
+    tags: list[str] | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    account: str | None = None,
+) -> CommunityPage:
     """List WhatsApp Communities the account belongs to.
 
     Only communities allowed via the admin UI are ever returned. Names and
@@ -786,12 +807,16 @@ async def list_communities(
         query: Case-insensitive substring to match against community names (empty = all).
         tags: Optional list of tags to search for (matches if community has ANY of
             these, case-insensitive).
+        limit: Maximum number of communities to return (default 50, capped at 200).
+        offset: Pagination offset (default 0).
         account: WhatsApp account id (see list_accounts); optional when you have only one.
 
     Returns:
-        Filtered list with fields: jid, name, topic.
+        ``items`` (fields: jid, name, topic) and ``next_offset`` — pass it as
+        ``offset`` to get the next page; null means there are no more results.
     """
     try:
+        limit = max(1, min(limit, MAX_LIST_LIMIT))
         scope = await resolve_scope(account)
         allowed = await scope.db.list_allowed_jids()
         groups = await scope.bridge.list_groups()
@@ -812,7 +837,9 @@ async def list_communities(
             if query_lower and query_lower not in g.name.casefold():
                 continue
             results.append(Community(jid=g.jid, name=g.name, topic=g.topic))
-        return results
+        return CommunityPage.model_validate(
+            _page(results[offset : offset + limit + 1], limit, offset)
+        )
     except Exception as exc:
         raise _fail("list_communities", exc) from exc
 
