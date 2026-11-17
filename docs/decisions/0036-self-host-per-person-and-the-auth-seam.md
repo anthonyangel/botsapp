@@ -43,10 +43,19 @@ operator in the position of risking other people's accounts.
 - Authorization (allowlist, grants, chat visibility) already lives in SQLite
   and does not depend on WorkOS.
 
-## Not done yet (follow-ups)
+## Follow-ups
 
-- Single-tenant bootstrap mode that hides users/grants/invitations.
-- One-command Fly deploy and a scripted WorkOS setup (the open runbook issue).
-- Verify the WorkOS directory/role code against a live environment (still open
-  from 0026) before recommending it to other self-hosters.
+Done in the same PR (see [docs/self-hosting.md](../self-hosting.md)):
+
+- `scripts/fly-deploy.sh`: one-command, re-runnable Fly deploy that never
+  overwrites existing secrets.
+- `workos/setup.sh`: generic WorkOS setup (the CLI part, idempotent) plus
+  ready-to-paste payloads for the MCP-only operations.
+- Live read-only verification of the WorkOS config, roles, and invitation flow
+  against the maintainer's production environment. Member removal and role
+  change from the Users page remain unexercised live (they mutate real users).
+
+Still open:
+
+- Single-tenant bootstrap mode that hides users, grants and invitations.
 - Optional: a second auth provider, only if someone needs one.
