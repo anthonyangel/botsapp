@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import AuthorizationError
-from fastmcp.server.auth import AuthContext, restrict_tag
+from fastmcp.server.auth import AuthContext, AuthProvider, restrict_tag
 from fastmcp.server.auth.providers.workos import AuthKitProvider
 from fastmcp.server.middleware import AuthMiddleware
 from mcp.types import Icon
@@ -60,7 +60,10 @@ async def allowed_family_email(ctx: AuthContext) -> bool:
     return True
 
 
-def _build_auth() -> AuthKitProvider | None:
+def _build_auth() -> AuthProvider | None:
+    # The one place the MCP login provider is chosen (docs/decisions/0036).
+    # Everything downstream reads only the token's `email` claim, so any
+    # fastmcp auth provider that puts a verified email there can replace this.
     if LOCAL_DEV_DISABLE_AUTH:
         logger.warning(
             "LOCAL_DEV_DISABLE_AUTH is set — running with NO login. Every tool is "

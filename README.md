@@ -36,6 +36,8 @@ Nothing is visible to the MCP server until you do this — see
 
 ### WorkOS AuthKit setup
 
+> Setting this up for your own deployment? See [docs/self-hosting.md](docs/self-hosting.md): `workos/setup.sh` and `scripts/fly-deploy.sh` script most of what follows.
+
 The MCP server itself (**http://localhost:8000**) normally requires AuthKit
 login — only emails on the allowlist at **http://localhost:8100/users**
 (the admin UI's Users page, backed by the same shared DB as the chat

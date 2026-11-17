@@ -37,6 +37,7 @@ Lightweight architecture-decision records for `botsapp`. Read in order — each 
 - [0033 — WhatsApp labels/lists as a read-only chat filter](0033-whatsapp-labels-as-a-read-only-chat-filter.md) *(adds a data source alongside tags; nothing copied into SQLite)*
 - [0034 — Admin UI shows and edits WhatsApp labels](0034-admin-ui-shows-and-edits-whatsapp-labels.md) *(separate Labels column, owner-only writes via the admin key; amends 0033's read-only bullet for the admin UI only)*
 - [0035 — ElevenLabs Scribe replaces OpenAI whisper-1 for voice-note transcription](0035-elevenlabs-scribe-as-a-free-tier-transcription-backend.md) *(supersedes 0014's provider choice only; opt-in and fail-silent rules unchanged)*
+- [0036 — Self-host per person: single-tenant is the portable shape; WorkOS stays the default login behind a narrow seam](0036-self-host-per-person-and-the-auth-seam.md) *(extends 0025/0026; no behaviour change to the multi-tenant path)*
 
 This log exists because the project's first build (WuzAPI + a hand-rolled server, full write access, no auth) silently diverged from an earlier plan (WAHA, native read-only MCP) with nothing recorded about why. Add a new numbered entry here for the next architectural pivot instead of letting it happen unrecorded again — supersede old records explicitly (name which parts, as 0010/0011/0013 do above) rather than editing or deleting them.
 

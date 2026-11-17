@@ -6,6 +6,16 @@
 # each get their own `command:` and talk directly to the host's 8000/8100.
 set -eu
 
+# This entrypoint is the public-facing deploy (Caddy on Fly's public port), so
+# the no-login dev escape hatch must never be on here (docs/decisions/0036).
+# docker-compose and local runs don't use this script, so they're unaffected.
+case "$(printf '%s' "${LOCAL_DEV_DISABLE_AUTH:-}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes)
+    echo "start.sh: refusing to start: LOCAL_DEV_DISABLE_AUTH is set on the public deploy" >&2
+    exit 1
+    ;;
+esac
+
 # admin-ui: unchanged from pre-0028 — bound to :: (not 0.0.0.0) because it's
 # reached two ways on the same Machine: `fly proxy` over the real 6PN IPv6
 # interface (confirmed live: 127.0.0.1:8100 refused, ::1:8100 OK, after a
